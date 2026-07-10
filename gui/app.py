@@ -569,11 +569,11 @@ class GridGameApp:
 
         self.focused_slot = None
         self.spectator_cards = {}
-        split_size = 22
+        max_p = getattr(self, "max_players", 6)
+        default_split_size = 17 if max_p > 5 else 22
+        split_size = default_split_size
         split_w = 20 * split_size
         split_h = 10 * split_size
-
-        max_p = getattr(self, "max_players", 6)
         cols = 3 if max_p > 4 else 2
         for slot_id in range(1, max_p + 1):
             row = (slot_id - 1) // cols
@@ -1483,12 +1483,14 @@ class GridGameApp:
                 p_data = self.per_player_data.get(p_id, {})
 
                 # Determine sizes based on split_size
+                max_p = getattr(self, "max_players", 6)
+                default_split_size = 17 if max_p > 5 else 22
                 if focused is None:
-                    split_size = 22
+                    split_size = default_split_size
                 elif slot_id == focused:
-                    split_size = 36
+                    split_size = 32 if max_p > 5 else 36
                 else:
-                    split_size = 14
+                    split_size = 8 if max_p > 5 else 14
 
                 split_w = 20 * split_size
                 split_h = 10 * split_size
@@ -1497,7 +1499,7 @@ class GridGameApp:
                 if not p_info:
                     canvas.delete("all")
                     canvas.create_rectangle(0, 0, split_w, split_h, fill="#121214", outline="#1a1a24")
-                    empty_font = ("Segoe UI", 12 if split_size == 36 else (9 if split_size == 22 else 6), "bold")
+                    empty_font = ("Segoe UI", 12 if split_size == 36 else (10 if split_size == 32 else (9 if split_size == 22 else (8 if split_size == 17 else 5))), "bold")
                     canvas.create_text(
                         10 * split_size, 5 * split_size,
                         text="SLOT " + str(slot_id) + " EMPTY\nWAITING FOR PLAYER" if split_size > 14 else "EMPTY",
@@ -1527,17 +1529,29 @@ class GridGameApp:
                         p_margin = 5
                         flare_offset = 7
                         ring_w = 2
+                    elif split_size == 32:
+                        flag_font = ("Segoe UI", 10, "bold")
+                        arrow_font = ("Segoe UI", 12, "bold")
+                        p_margin = 4
+                        flare_offset = 6
+                        ring_w = 2
                     elif split_size == 22:
                         flag_font = ("Segoe UI", 8, "bold")
                         arrow_font = ("Segoe UI", 10, "bold")
                         p_margin = 3
                         flare_offset = 4
                         ring_w = 1
-                    else:  # 14
-                        flag_font = ("Segoe UI", 6, "bold")
-                        arrow_font = ("Segoe UI", 7, "bold")
+                    elif split_size == 17:
+                        flag_font = ("Segoe UI", 7, "bold")
+                        arrow_font = ("Segoe UI", 8, "bold")
                         p_margin = 2
                         flare_offset = 3
+                        ring_w = 1
+                    else:  # 14 or smaller (e.g. 8)
+                        flag_font = ("Segoe UI", 5 if split_size < 12 else 6, "bold")
+                        arrow_font = ("Segoe UI", 5 if split_size < 12 else 7, "bold")
+                        p_margin = 1 if split_size < 12 else 2
+                        flare_offset = 1 if split_size < 12 else 3
                         ring_w = 1
 
                     undiscovered = {item for item in items if item not in visited}
