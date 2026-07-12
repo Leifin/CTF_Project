@@ -12,6 +12,7 @@ POWERUPS = [
     {"id": "shield", "label": "Shield",      "icon": "🛡"},
     {"id": "reveal", "label": "Reveal",      "icon": "🔍"},
 ]
+POWERUP_SLOTS = {"reveal": 0, "shield": 1, "speed": 2}
 
 # Word pools for Caesar cipher clues
 _WORDS_EASY   = ["SECRET", "VAULT", "CIPHER", "MATRIX", "HACKER", "SHIELD", "SYSTEM", "KERNEL", "BINARY", "ROUTER", "CODING", "DECODE"]
@@ -276,15 +277,6 @@ class GridServer:
         if not (0 <= new_r < GRID_ROWS and 0 <= new_c < GRID_COLS):
             return
 
-        # Block moves onto another player's current position (body collision)
-        other_positions = {(p["r"], p["c"]) for pid, p in self.players.items() if pid != p_id}
-        if (new_r, new_c) in other_positions:
-            return
-
-        # Block moves into another player's visited trail territory
-        if (new_r, new_c) in self._all_other_visited(p_id):
-            return
-
         # Detect if player finds their hidden item for the first time
         item_found = False
         if (new_r, new_c) in self.player_items.get(p_id, set()) and (new_r, new_c) not in self.player_visited[p_id]:
@@ -297,13 +289,15 @@ class GridServer:
 
         # Auto-collect powerup if player steps on one
         if (new_r, new_c) in self.powerups:
-            pu_id = self.powerups.pop((new_r, new_c))
+            pu_id = self.powerups[(new_r, new_c)]
             slots = self.player_powerups.setdefault(p_id, [None, None, None])
-            for i in range(3):
-                if slots[i] is None:
-                    slots[i] = pu_id
-                    break
-            play_sound("collect")
+            slot_index = POWERUP_SLOTS[pu_id]
+            if slots[slot_index] is None:
+                self.powerups.pop((new_r, new_c))
+                slots[slot_index] = pu_id
+                play_sound("collect")
+            else:
+                play_sound("move")
         elif item_found:
             play_sound("item_found")
         else:
@@ -368,6 +362,8 @@ class GridServer:
             return
 
         pu_type = slots[slot]
+        if POWERUP_SLOTS.get(pu_type) != slot:
+            return
 
         if pu_type == "reveal":
             # Mark the player's nearest undiscovered item as visited (revealed)
@@ -385,31 +381,34 @@ class GridServer:
                 play_sound("qte_wrong")
 
         elif pu_type == "shield":
-            # Move every other player's item to an undiscovered cell if they're standing on it
+            # Relocate the opponent item underneath the activating player.
+            source_pos = (self.players[p_id]["r"], self.players[p_id]["c"])
+            owner_id = next(
+                (other_id for other_id, items in self.player_items.items()
+                 if other_id != p_id and source_pos in items),
+                None,
+            )
             affected = False
-            for other_id, other_p in list(self.players.items()):
-                if other_id == p_id:
-                    continue
-                other_pos = (other_p["r"], other_p["c"])
-                if other_pos in self.player_items.get(other_id, set()):
-                    # Relocate this item to a random cell not visited by other_id
-                    other_visited = self.player_visited.get(other_id, set())
-                    new_pos = None
-                    for _ in range(10000):
-                        r = random.randint(0, GRID_ROWS - 1)
-                        c = random.randint(0, GRID_COLS - 1)
-                        if (r, c) not in other_visited and (r, c) not in self.player_items.get(other_id, set()):
-                            new_pos = (r, c)
-                            break
-                    if new_pos:
-                        self.player_items[other_id].discard(other_pos)
-                        self.player_items[other_id].add(new_pos)
-                        # Reassign key to new position
-                        old_key = self.player_item_keys.get(other_id, {}).pop(other_pos, None)
-                        if old_key is None:
-                            old_key = make_caesar_clue()
-                        self.player_item_keys.setdefault(other_id, {})[new_pos] = old_key
-                        affected = True
+            if owner_id is not None:
+                owner_visited = self.player_visited.get(owner_id, set())
+                owner_pos = (self.players[owner_id]["r"], self.players[owner_id]["c"])
+                occupied_items = set().union(*self.player_items.values()) if self.player_items else set()
+                new_pos = None
+                for _ in range(10000):
+                    candidate = (
+                        random.randint(0, GRID_ROWS - 1),
+                        random.randint(0, GRID_COLS - 1),
+                    )
+                    if (candidate not in owner_visited and candidate not in occupied_items
+                            and candidate != owner_pos):
+                        new_pos = candidate
+                        break
+                if new_pos:
+                    self.player_items[owner_id].discard(source_pos)
+                    self.player_items[owner_id].add(new_pos)
+                    old_key = self.player_item_keys.get(owner_id, {}).pop(source_pos, None)
+                    self.player_item_keys.setdefault(owner_id, {})[new_pos] = old_key
+                    affected = True
 
             if affected:
                 slots[slot] = None
@@ -461,23 +460,25 @@ class GridServer:
                 pass
 
     # ------------------------------------------------------------------
-    def broadcast_state(self):
+    def _build_state(self, recipient_id):
         per_player = {}
         for p_id in self.players:
-            per_player[str(p_id)] = {
-                "visited": list(self.player_visited.get(p_id, set())),
+            is_owner = p_id == recipient_id
+            player_state = {
+                "visited": list(self.player_visited.get(p_id, set())) if is_owner else [],
                 "items":   list(self.player_items.get(p_id, set())),
                 "collected": {
                     f"{r},{c}": color
                     for (r, c), color in self.player_collected.get(p_id, {}).items()
-                },
-                "item_keys": {
-                    f"{r},{c}": key
-                    for (r, c), key in self.player_item_keys.get(p_id, {}).items()
-                },
+                } if is_owner else {},
                 "powerups": self.player_powerups.get(p_id, [None, None, None])
             }
-        state_msg = {
+            player_state["item_keys"] = {
+                f"{r},{c}": key
+                for (r, c), key in self.player_item_keys.get(p_id, {}).items()
+            } if is_owner else {}
+            per_player[str(p_id)] = player_state
+        return {
             "type": "state",
             "players": {str(k): v for k, v in self.players.items()},
             "game_started": self.game_started,
@@ -490,9 +491,11 @@ class GridServer:
             "difficulty": self.difficulty,
             "items_per_player": self.items_per_player
         }
-        data_str = json.dumps(state_msg) + "\n"
-        for conn in list(self.clients.values()):
+
+    def broadcast_state(self):
+        for p_id, conn in list(self.clients.items()):
             try:
+                data_str = json.dumps(self._build_state(p_id)) + "\n"
                 conn.sendall(data_str.encode())
             except Exception:
                 pass

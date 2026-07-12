@@ -27,8 +27,8 @@ def make_caesar_clue(difficulty="easy"):
     return f"{word}|{''.join(cipher)}|{shift}"
 
 POWERUP_META = {
-    "speed":  {"label": "Speed Boost", "icon": "\u26a1", "color": "#ffd24d"},
-    "shield": {"label": "Shield",      "icon": "\U0001f6e1", "color": "#00d2ff"},
+    "speed":  {"label": "Teleport",    "icon": "\u26a1", "color": "#ffd24d"},
+    "shield": {"label": "Move Item",   "icon": "\U0001f6e1", "color": "#00d2ff"},
     "reveal": {"label": "Reveal",      "icon": "\U0001f50d", "color": "#ff9f1a"},
 }
 
@@ -114,6 +114,8 @@ class GridGameApp:
         self.root.bind("<S>", lambda e: self.move_player(1, 0))
         self.root.bind("<A>", lambda e: self.move_player(0, -1))
         self.root.bind("<D>", lambda e: self.move_player(0, 1))
+        self.root.bind("<Return>", lambda e: self.open_vault_at_current_item())
+        self.root.bind("<KP_Enter>", lambda e: self.open_vault_at_current_item())
 
     def clear_screen(self):
         if self.current_frame:
@@ -1170,7 +1172,8 @@ class GridGameApp:
                 border_color = "#ffffff" if is_selected else meta["color"]
                 bg = "#2a2a3a" if is_selected else "#1a1a24"
             else:
-                lbl.config(text=f"[{i+1}] EMPTY", fg="#3a3a4a")
+                empty_labels = ("REVEAL", "MOVE ITEM", "TELEPORT")
+                lbl.config(text=f"[{i+1}] {empty_labels[i]} (EMPTY)", fg="#5f5f6e")
                 border_color = "#2d2d37"
                 bg = "#1a1a24"
 
@@ -1208,6 +1211,24 @@ class GridGameApp:
             return None  # async — dialog closes itself
 
         LockScreenDialog(self.root, self.button_font, items_data, on_submit).show()
+
+    def open_vault_at_current_item(self):
+        """Open the vault only when standing on one of the local player's items."""
+        if not self.in_active_game or self.qte_active:
+            return
+        if self.my_player_id == "solo":
+            if (self.player_r, self.player_c) in self.hidden_items:
+                self.open_lock_dialog_solo()
+            return
+        if not self.is_client or self.my_player_id not in self.players:
+            return
+        position = (
+            self.players[self.my_player_id]["r"],
+            self.players[self.my_player_id]["c"],
+        )
+        own_items = self.per_player_data.get(self.my_player_id, {}).get("items", set())
+        if position in own_items:
+            self.open_lock_dialog()
 
     def on_unlock_result_received(self, success):
         # Dialog handles its own feedback; just refresh the map
@@ -1628,6 +1649,8 @@ class GridGameApp:
             return
 
         self.canvas.delete("visited_element")
+        self.canvas.delete("shared_item_element")
+        self.canvas.delete("powerup_element")
         self.canvas.delete("player_element")
         self.canvas.delete("qte_element")
 
@@ -1642,19 +1665,20 @@ class GridGameApp:
             )
         else:
             my_id = self.my_player_id
-            for p_id, p_data in self.per_player_data.items():
-                p_color = self.players[p_id]["color"] if p_id in self.players else "#888888"
-                item_keys = p_data.get("item_keys", {}) if p_id == my_id else {}
-                arrows = self.client_cell_arrows if p_id == my_id else {}
+            p_data = self.per_player_data.get(my_id, {})
+            if my_id in self.players:
+                p_color = self.players[my_id]["color"]
                 self._draw_player_cells(
                     p_data.get("visited", set()),
                     p_data.get("items", set()),
                     p_data.get("collected", {}),
                     blend_color(p_color), p_color,
-                    item_keys=item_keys,
-                    cell_arrows=arrows,
-                    is_me=(p_id == my_id)
+                    item_keys=p_data.get("item_keys", {}),
+                    cell_arrows=self.client_cell_arrows,
+                    is_me=True
                 )
+            self._draw_shared_items()
+            self._draw_map_powerups()
 
         # 2. Players
         for p_id, p in self.players.items():
@@ -1820,10 +1844,6 @@ class GridGameApp:
         # --- Per-player visited check ---
         if self.is_client and self.client:
             my_visited = self.client.get_my_visited()
-            other_visited = self.client.get_all_other_visited()
-            # Block moves into another player's territory
-            if (new_r, new_c) in other_visited and (new_r, new_c) not in my_visited:
-                return
             needs_qte = (new_r, new_c) not in my_visited
         else:
             # Solo mode
@@ -1872,10 +1892,7 @@ class GridGameApp:
             if cell in map_powerups:
                 pu_id = map_powerups.pop(cell)
                 slots = getattr(self, 'solo_powerups', [None, None, None])
-                for i in range(3):
-                    if slots[i] is None:
-                        slots[i] = pu_id
-                        break
+                slots[0] = pu_id
                 play_sound("collect")
                 self.update_powerup_bar()
             elif item_found:
@@ -2082,6 +2099,49 @@ class GridGameApp:
             return "\u2191" if dr < 0 else "\u2193"
         else:
             return "\u2190" if dc < 0 else "\u2192"
+
+    def _draw_shared_items(self):
+        """Draw every remaining item without exposing another player's vault clue."""
+        my_data = self.per_player_data.get(self.my_player_id, {})
+        my_visited = my_data.get("visited", set())
+        for owner_id, data in self.per_player_data.items():
+            color = self.players.get(owner_id, {}).get("color", "#888888")
+            for r, c in data.get("items", set()):
+                if owner_id == self.my_player_id and (r, c) in my_visited:
+                    continue
+                margin = 13
+                x1 = c * CELL_SIZE + margin
+                y1 = r * CELL_SIZE + margin
+                x2 = (c + 1) * CELL_SIZE - margin
+                y2 = (r + 1) * CELL_SIZE - margin
+                self.canvas.create_rectangle(
+                    x1, y1, x2, y2, fill="#1a1a24", outline=color,
+                    width=3, tags="shared_item_element"
+                )
+                self.canvas.create_text(
+                    (x1 + x2) // 2, (y1 + y2) // 2,
+                    text=f"P{owner_id}", fill=color,
+                    font=("Segoe UI", 9, "bold"), tags="shared_item_element"
+                )
+
+    def _draw_map_powerups(self):
+        """Draw all uncollected multiplayer powerups as shared map objects."""
+        if not self.client:
+            return
+        for (r, c), powerup_id in self.client.map_powerups.items():
+            meta = POWERUP_META.get(powerup_id, {})
+            cx = c * CELL_SIZE + CELL_SIZE // 2
+            cy = r * CELL_SIZE + CELL_SIZE // 2
+            color = meta.get("color", "#ffffff")
+            self.canvas.create_oval(
+                cx - 13, cy - 13, cx + 13, cy + 13,
+                fill="#1a1a24", outline=color, width=3,
+                tags="powerup_element"
+            )
+            self.canvas.create_text(
+                cx, cy, text=str({"reveal": 1, "shield": 2, "speed": 3}.get(powerup_id, "?")),
+                fill=color, font=("Segoe UI", 10, "bold"), tags="powerup_element"
+            )
 
     def _draw_player_cells(self, visited, items, collected, trail_fill, trail_outline,
                             item_keys=None, cell_arrows=None, is_me=False):
