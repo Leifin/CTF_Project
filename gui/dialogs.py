@@ -1,5 +1,8 @@
 import tkinter as tk
 from tkinter import font
+import threading
+
+from network.discovery import discover_games
 
 class CustomIPDialog:
     def __init__(self, parent, button_font):
@@ -8,6 +11,7 @@ class CustomIPDialog:
 
     def show(self):
         result_var = tk.StringVar(value="")
+        discovered = []
         
         dialog = tk.Toplevel(self.parent)
         dialog.title("Join Lobby")
@@ -15,8 +19,8 @@ class CustomIPDialog:
         dialog.resizable(False, False)
         
         # Center dialog relative to parent window
-        dialog_width = 440
-        dialog_height = 240
+        dialog_width = 560
+        dialog_height = 470
         main_x = self.parent.winfo_x()
         main_y = self.parent.winfo_y()
         main_width = self.parent.winfo_width()
@@ -41,12 +45,28 @@ class CustomIPDialog:
         
         lbl_desc = tk.Label(
             dialog,
-            text="Enter Host Radmin VPN or LAN IP address:",
+            text="Available games on your LAN or VPN network",
             fg="#8c8c9a",
             bg="#121214",
             font=font.Font(family="Segoe UI", size=10)
         )
-        lbl_desc.pack(pady=(0, 15))
+        lbl_desc.pack(pady=(0, 10))
+
+        list_frame = tk.Frame(dialog, bg="#1a1a24", highlightthickness=1,
+                              highlightbackground="#2d2d37")
+        list_frame.pack(fill="both", expand=True, padx=40, pady=5)
+
+        game_list = tk.Listbox(
+            list_frame, bg="#1a1a24", fg="#ffffff",
+            selectbackground="#00d2ff", selectforeground="#121214",
+            font=font.Font(family="Segoe UI", size=10), bd=0,
+            highlightthickness=0, activestyle="none"
+        )
+        game_list.pack(fill="both", expand=True, padx=8, pady=8)
+
+        status = tk.Label(dialog, text="Searching for games...", fg="#8c8c9a",
+                          bg="#121214", font=font.Font(family="Segoe UI", size=9))
+        status.pack(pady=(2, 4))
         
         # Modern Styled Text Input Box
         entry_frame = tk.Frame(
@@ -69,18 +89,66 @@ class CustomIPDialog:
         )
         entry.pack(fill="x", padx=10, pady=8)
         entry.insert(0, "127.0.0.1")
-        entry.focus_set()
-        entry.selection_range(0, tk.END)
         
         # Button panel
         btn_frame = tk.Frame(dialog, bg="#121214")
-        btn_frame.pack(fill="x", padx=40, pady=25)
+        btn_frame.pack(fill="x", padx=40, pady=(8, 18))
+
+        def apply_results(games):
+            if not dialog.winfo_exists():
+                return
+            discovered[:] = games
+            game_list.delete(0, tk.END)
+            joinable_count = 0
+            for game in games:
+                joinable = not game.get("game_started", False)
+                if joinable:
+                    joinable_count += 1
+                state = "JOINABLE" if joinable else "IN GAME"
+                game_list.insert(
+                    tk.END,
+                    f"{game.get('host', 'Host')}  |  {game['ip']}  |  "
+                    f"{game.get('players', 0)}/{game.get('max_players', '?')} players  |  {state}"
+                )
+            if games:
+                status.config(text=f"Found {len(games)} game(s), {joinable_count} joinable")
+                for index, game in enumerate(games):
+                    if not game.get("game_started", False):
+                        game_list.selection_set(index)
+                        game_list.activate(index)
+                        entry.delete(0, tk.END)
+                        entry.insert(0, game["ip"])
+                        break
+            else:
+                status.config(text="No games found. Refresh or enter an IP address.")
+
+        def refresh_games():
+            status.config(text="Searching for games...")
+            refresh_button.config(state="disabled")
+
+            def worker():
+                games = discover_games()
+                if dialog.winfo_exists():
+                    dialog.after(0, lambda: (apply_results(games), refresh_button.config(state="normal")))
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        def on_select(_event=None):
+            selection = game_list.curselection()
+            if selection:
+                game = discovered[selection[0]]
+                entry.delete(0, tk.END)
+                entry.insert(0, game["ip"])
         
         def on_cancel():
             result_var.set("")
             dialog.destroy()
             
         def on_join():
+            selection = game_list.curselection()
+            if selection and discovered[selection[0]].get("game_started", False):
+                status.config(text="That game has already started.", fg="#ff4d4d")
+                return
             val = entry.get().strip()
             if val:
                 result_var.set(val)
@@ -89,6 +157,8 @@ class CustomIPDialog:
         # Key bindings
         entry.bind("<Return>", lambda e: on_join())
         entry.bind("<Escape>", lambda e: on_cancel())
+        game_list.bind("<<ListboxSelect>>", on_select)
+        game_list.bind("<Double-Button-1>", lambda e: on_join())
         dialog.protocol("WM_DELETE_WINDOW", on_cancel)
 
         btn_cancel = tk.Button(
@@ -107,6 +177,14 @@ class CustomIPDialog:
         )
         btn_cancel.pack(side="left")
 
+        refresh_button = tk.Button(
+            btn_frame, text="REFRESH", command=refresh_games,
+            bg="#313143", fg="#ffffff", activebackground="#42425b",
+            activeforeground="#ffffff", font=self.button_font, bd=0,
+            width=12, pady=8, cursor="hand2"
+        )
+        refresh_button.pack(side="left", padx=12)
+
         btn_join = tk.Button(
             btn_frame,
             text="CONNECT",
@@ -122,6 +200,8 @@ class CustomIPDialog:
             cursor="hand2"
         )
         btn_join.pack(side="right")
+
+        refresh_games()
         
         self.parent.wait_window(dialog)
         return result_var.get()

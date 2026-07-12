@@ -4,6 +4,7 @@ import random
 import threading
 import time
 from config import GRID_ROWS, GRID_COLS, COLORS, play_sound
+from network.discovery import LobbyDiscoveryResponder
 
 # Powerup definitions (placeholder — no active function yet)
 POWERUPS = [
@@ -60,6 +61,15 @@ class GridServer:
         self.difficulty            = "easy"
         self.items_per_player      = 3
         self.cell_close_timer_active = False
+        self.discovery = LobbyDiscoveryResponder(self._discovery_state)
+
+    def _discovery_state(self):
+        return {
+            "port": self.port,
+            "players": len(self.players),
+            "max_players": self.max_players,
+            "game_started": self.game_started,
+        }
 
     # ------------------------------------------------------------------
     def _all_other_visited(self, p_id):
@@ -146,6 +156,7 @@ class GridServer:
             self.server_socket.listen(6)
             self.server_running = True
             threading.Thread(target=self._accept_connections, daemon=True).start()
+            self.discovery.start()
             return True
         except Exception as e:
             print(f"Server bind failed: {e}")
@@ -559,6 +570,7 @@ class GridServer:
     def stop(self):
         self.server_running = False
         self.spawner_active = False
+        self.discovery.stop()
         if self.server_socket:
             try:
                 self.server_socket.close()

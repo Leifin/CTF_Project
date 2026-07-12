@@ -32,6 +32,13 @@ POWERUP_META = {
     "reveal": {"label": "Reveal",      "icon": "\U0001f50d", "color": "#ff9f1a"},
 }
 
+def blend_color(foreground, background="#121214", amount=0.18):
+    """Blend two #RRGGBB colors into a Tk-compatible solid color."""
+    fg = tuple(int(foreground[i:i + 2], 16) for i in (1, 3, 5))
+    bg = tuple(int(background[i:i + 2], 16) for i in (1, 3, 5))
+    mixed = tuple(round(b + (f - b) * amount) for f, b in zip(fg, bg))
+    return "#" + "".join(f"{value:02x}" for value in mixed)
+
 class GridGameApp:
     def __init__(self, root):
         self.root = root
@@ -1585,7 +1592,7 @@ class GridGameApp:
                         else:
                             canvas.create_rectangle(
                                 vx1, vy1, vx2, vy2,
-                                fill=p_color + "22", outline=p_color, width=1
+                                fill=blend_color(p_color), outline=p_color, width=1
                             )
                             arrow_char = self.get_closest_item_arrow(r, c, undiscovered)
                             if arrow_char:
@@ -1643,7 +1650,7 @@ class GridGameApp:
                     p_data.get("visited", set()),
                     p_data.get("items", set()),
                     p_data.get("collected", {}),
-                    p_color + "22", p_color,
+                    blend_color(p_color), p_color,
                     item_keys=item_keys,
                     cell_arrows=arrows,
                     is_me=(p_id == my_id)
