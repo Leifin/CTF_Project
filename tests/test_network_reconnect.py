@@ -40,6 +40,26 @@ class NetworkReconnectTest(unittest.TestCase):
         self.assertTrue(second.connect())
         self.assertTrue(self.wait_for(lambda: second.my_player_id == 1))
 
+    def test_client_receives_started_game_state(self):
+        snapshots = []
+        client = GridClient(
+            "127.0.0.1",
+            port=self.port,
+            on_state_update=lambda: snapshots.append(
+                (client.game_started, client.difficulty, client.items_per_player)
+            ),
+        )
+        self.addCleanup(client.stop)
+        self.assertTrue(client.connect())
+        self.assertTrue(self.wait_for(lambda: client.my_player_id == 1))
+
+        self.server.start_game("medium")
+
+        self.assertTrue(
+            self.wait_for(lambda: (True, "medium", 3) in snapshots),
+            snapshots,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

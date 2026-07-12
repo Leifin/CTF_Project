@@ -60,6 +60,7 @@ class GridGameApp:
         self.qte_target_move = (0, 0)
         self.last_known_server_pos = None
         self.per_player_data = {}  # p_id -> {visited, items, collected}
+        self.client_cell_arrows = {}  # frozen directions for client-discovered cells
 
         # Network Game States
         self.is_host = False
@@ -405,14 +406,15 @@ class GridGameApp:
             lbl_status = self.slot_status_labels[i - 1]
             if i in current_players:
                 p_info = current_players[i]
+                player_prefix = "YOU - " if self.is_client and i == self.my_player_id else ""
                 if p_info.get("ready", False):
                     lbl_status.config(
-                        text=f"READY - Connected from {p_info['ip']}",
+                        text=f"{player_prefix}READY - Connected from {p_info['ip']}",
                         fg="#55ff55"
                     )
                 else:
                     lbl_status.config(
-                        text=f"NOT READY - Connected from {p_info['ip']}",
+                        text=f"{player_prefix}NOT READY - Connected from {p_info['ip']}",
                         fg="#ff4d4d"
                     )
             else:
@@ -887,7 +889,7 @@ class GridGameApp:
     def on_client_init(self, p_id):
         self.my_player_id = p_id
         self.max_players = getattr(self.client, "max_players", 6)
-        self.lbl_lobby_title.config(text="MULTIPLAYER LOBBY - CONNECTED")
+        self.lbl_lobby_title.config(text=f"MULTIPLAYER LOBBY - PLAYER {p_id}")
         self.lbl_status_desc.config(text="Toggle ready status to let the Host start...")
         self.btn_ready.config(state="normal", bg="#55ff55", fg="#121214")
         self.build_lobby_slots_ui()
@@ -953,7 +955,8 @@ class GridGameApp:
 
     def start_client_active_game_screen(self):
         self.in_active_game = True
-        self.client_cell_arrows = {}   # frozen (r,c) -> arrow char
+        if not hasattr(self, "client_cell_arrows"):
+            self.client_cell_arrows = {}   # frozen (r,c) -> arrow char
         self.selected_powerup_slot = None
         self.clear_screen()
 

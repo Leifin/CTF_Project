@@ -116,12 +116,12 @@ class GridClient:
                                 "powerups": data.get("powerups", [None, None, None])
                             }
 
-                        if self.on_state_update:
-                            self.on_state_update()
-
                         self.finished_players = msg.get("finished_players", [])
                         self.difficulty        = msg.get("difficulty", "easy")
                         self.items_per_player  = msg.get("items_per_player", 3)
+
+                        if self.on_state_update:
+                            self.on_state_update()
 
                     elif msg.get("type") == "unlock_result":
                         success = msg.get("success", False)
