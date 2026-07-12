@@ -6,7 +6,7 @@ class GridClient:
     def __init__(self, host_ip, port=5555,
                  on_init=None, on_state_update=None,
                  on_disconnect=None, on_lobby_full=None,
-                 on_unlock_result=None):
+                 on_unlock_result=None, on_profile_result=None):
         self.host_ip = host_ip
         self.port = port
         self.on_init = on_init
@@ -14,6 +14,7 @@ class GridClient:
         self.on_disconnect = on_disconnect
         self.on_lobby_full = on_lobby_full
         self.on_unlock_result = on_unlock_result
+        self.on_profile_result = on_profile_result
 
         self.client_socket = None
         self.client_running = False
@@ -133,6 +134,11 @@ class GridClient:
                         success = msg.get("success", False)
                         if self.on_unlock_result:
                             self.on_unlock_result(success)
+                    elif msg.get("type") == "profile_result":
+                        if self.on_profile_result:
+                            self.on_profile_result(
+                                msg.get("success", False), msg.get("reason", "")
+                            )
             except Exception:
                 break
 
@@ -174,6 +180,15 @@ class GridClient:
         msg = {"action": "use_powerup", "slot": slot}
         if target_player_id is not None:
             msg["target_id"] = target_player_id
+        try:
+            self.client_socket.sendall((json.dumps(msg) + "\n").encode())
+        except Exception:
+            pass
+
+    def send_profile(self, name, color):
+        if not self.client_running:
+            return
+        msg = {"action": "profile", "name": str(name), "color": str(color)}
         try:
             self.client_socket.sendall((json.dumps(msg) + "\n").encode())
         except Exception:

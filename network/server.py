@@ -3,6 +3,7 @@ import json
 import random
 import threading
 import time
+import re
 from config import GRID_ROWS, GRID_COLS, COLORS, play_sound
 from network.discovery import LobbyDiscoveryResponder
 
@@ -52,6 +53,7 @@ class GridServer:
         self.player_items     = {}  # p_id -> set of (r, c)  (remaining items)
         self.player_collected = {}  # p_id -> {(r, c): color}
         self.player_item_keys = {}  # p_id -> {(r, c): str numeric key}
+        self.host_discovered_items = set()  # host-only visibility; never sent to clients
 
         # Global powerup state
         self.powerups         = {}  # (r, c) -> powerup_id str  (remaining on map)
@@ -96,6 +98,7 @@ class GridServer:
 
     def spawn_player_items(self):
         """Spawn items_per_player unique items for every player, each with a Caesar cipher clue."""
+        self.host_discovered_items.clear()
         all_visited = set()
         for v in self.player_visited.values():
             all_visited |= v
@@ -212,6 +215,7 @@ class GridServer:
 
             self.clients[p_id] = conn
             self.players[p_id] = {"r": r, "c": c, "color": color, "ip": addr[0], "moves": 0, "ready": False}
+            self.players[p_id]["name"] = f"Player {p_id}"
             self.player_visited[p_id]   = {(r, c)}
             self.player_items[p_id]     = set()
             self.player_collected[p_id] = {}
@@ -259,6 +263,8 @@ class GridServer:
                             self.broadcast_state()
                     elif msg.get("action") == "use_powerup":
                         self.process_client_powerup(p_id, msg.get("slot", 0), msg.get("target_id"))
+                    elif msg.get("action") == "profile":
+                        self.process_client_profile(p_id, msg.get("name", ""), msg.get("color", ""))
             except Exception:
                 break
 
@@ -266,6 +272,7 @@ class GridServer:
             conn.close()
         except Exception:
             pass
+        self.host_discovered_items.difference_update(self.player_items.get(p_id, set()))
         for d in (self.clients, self.players,
                   self.player_visited, self.player_items, self.player_collected,
                   self.player_item_keys, self.player_powerups):
@@ -276,6 +283,45 @@ class GridServer:
             self.on_lobby_update()
         if self.on_game_update and self.game_started:
             self.on_game_update()
+        self.broadcast_state()
+
+    def process_client_profile(self, p_id, name, color):
+        if p_id not in self.players or self.game_started:
+            self._send_to(p_id, {
+                "type": "profile_result", "success": False,
+                "reason": "Profiles can only be changed in the lobby.",
+            })
+            return
+
+        clean_name = " ".join(str(name).split())[:16]
+        clean_color = str(color).strip().lower()
+        if not clean_name:
+            self._send_to(p_id, {
+                "type": "profile_result", "success": False,
+                "reason": "Player name cannot be blank.",
+            })
+            return
+        if not re.fullmatch(r"#[0-9a-f]{6}", clean_color):
+            self._send_to(p_id, {
+                "type": "profile_result", "success": False,
+                "reason": "Choose a valid player color.",
+            })
+            return
+        if any(
+            other_id != p_id and player.get("color", "").lower() == clean_color
+            for other_id, player in self.players.items()
+        ):
+            self._send_to(p_id, {
+                "type": "profile_result", "success": False,
+                "reason": "That color is already used by another player.",
+            })
+            return
+
+        self.players[p_id]["name"] = clean_name
+        self.players[p_id]["color"] = clean_color
+        self._send_to(p_id, {"type": "profile_result", "success": True})
+        if self.on_lobby_update:
+            self.on_lobby_update()
         self.broadcast_state()
 
     # ------------------------------------------------------------------
@@ -292,10 +338,12 @@ class GridServer:
         if not (0 <= new_r < GRID_ROWS and 0 <= new_c < GRID_COLS):
             return
 
-        # Detect if player finds their hidden item for the first time
-        item_found = False
-        if (new_r, new_c) in self.player_items.get(p_id, set()) and (new_r, new_c) not in self.player_visited[p_id]:
-            item_found = True
+        item_found = (
+            (new_r, new_c) in self.player_items.get(p_id, set())
+            and (new_r, new_c) not in self.player_visited[p_id]
+        )
+        if any((new_r, new_c) in items for items in self.player_items.values()):
+            self.host_discovered_items.add((new_r, new_c))
 
         self.players[p_id]["r"] = new_r
         self.players[p_id]["c"] = new_c
@@ -352,6 +400,7 @@ class GridServer:
             if correct_word and str(entered_key).strip().upper() == correct_word.upper():
                 # Correct — collect the item
                 self.player_items[p_id].discard(pos)
+                self.host_discovered_items.discard(pos)
                 del self.player_item_keys[p_id][pos]
                 self.player_collected[p_id][pos] = self.players[p_id]["color"]
                 play_sound("collect")
@@ -392,6 +441,7 @@ class GridServer:
                 # Pick the first undiscovered item
                 next_item = undiscovered[0]
                 self.player_visited[p_id].add(next_item)
+                self.host_discovered_items.add(next_item)
                 slots[slot] = None
                 play_sound("qte_success")
                 self.broadcast_state()
@@ -399,31 +449,36 @@ class GridServer:
                 play_sound("qte_wrong")
 
         elif pu_type == "shield":
-            # Relocate the opponent item underneath the activating player.
-            source_pos = (self.players[p_id]["r"], self.players[p_id]["c"])
-            owner_id = next(
-                (other_id for other_id, items in self.player_items.items()
-                 if other_id != p_id and source_pos in items),
-                None,
-            )
+            try:
+                owner_id = int(target_id)
+            except (ValueError, TypeError):
+                owner_id = None
+
             affected = False
-            if owner_id is not None:
+            if owner_id in self.players and owner_id != p_id:
+                eligible_items = list(
+                    self.player_items.get(owner_id, set())
+                    & self.player_visited.get(p_id, set())
+                )
+                source_pos = random.choice(eligible_items) if eligible_items else None
                 owner_visited = self.player_visited.get(owner_id, set())
                 owner_pos = (self.players[owner_id]["r"], self.players[owner_id]["c"])
                 occupied_items = set().union(*self.player_items.values()) if self.player_items else set()
                 new_pos = None
-                for _ in range(10000):
-                    candidate = (
-                        random.randint(0, GRID_ROWS - 1),
-                        random.randint(0, GRID_COLS - 1),
-                    )
-                    if (candidate not in owner_visited and candidate not in occupied_items
-                            and candidate != owner_pos):
-                        new_pos = candidate
-                        break
-                if new_pos:
+                if source_pos is not None:
+                    for _ in range(10000):
+                        candidate = (
+                            random.randint(0, GRID_ROWS - 1),
+                            random.randint(0, GRID_COLS - 1),
+                        )
+                        if (candidate not in owner_visited and candidate not in occupied_items
+                                and candidate != owner_pos):
+                            new_pos = candidate
+                            break
+                if source_pos is not None and new_pos:
                     self.player_items[owner_id].discard(source_pos)
                     self.player_items[owner_id].add(new_pos)
+                    self.host_discovered_items.discard(source_pos)
                     old_key = self.player_item_keys.get(owner_id, {}).pop(source_pos, None)
                     self.player_item_keys.setdefault(owner_id, {})[new_pos] = old_key
                     affected = True
@@ -643,3 +698,4 @@ class GridServer:
         self.player_visited.clear()
         self.player_items.clear()
         self.player_collected.clear()
+        self.host_discovered_items.clear()

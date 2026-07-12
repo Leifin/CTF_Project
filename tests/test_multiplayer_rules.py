@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from gui.app import GridGameApp
+from gui.dialogs import LockScreenDialog
 from network.server import GridServer
 
 
@@ -95,6 +96,49 @@ class MultiplayerRulesTest(unittest.TestCase):
         app.client = type("Client", (), {"finished_players": [2]})()
         self.assertEqual(set(app.visible_map_players()), {1})
 
+    def test_profile_update_is_sanitized_and_broadcast(self):
+        server = self.make_server()
+        server.players[1]["name"] = "Player 1"
+        server.players[2]["name"] = "Player 2"
+        sent = []
+        broadcasts = []
+        server._send_to = lambda p_id, msg: sent.append((p_id, msg))
+        server.broadcast_state = lambda: broadcasts.append(True)
+
+        server.game_started = False
+        server.process_client_profile(1, "  Alice    Grid  ", "#12ABef")
+
+        self.assertEqual(server.players[1]["name"], "Alice Grid")
+        self.assertEqual(server.players[1]["color"], "#12abef")
+        self.assertTrue(sent[-1][1]["success"])
+        self.assertEqual(broadcasts, [True])
+
+    def test_duplicate_profile_color_is_rejected(self):
+        server = self.make_server()
+        sent = []
+        server._send_to = lambda p_id, msg: sent.append((p_id, msg))
+        server.game_started = False
+
+        server.process_client_profile(1, "Alice", server.players[2]["color"])
+
+        self.assertFalse(sent[-1][1]["success"])
+        self.assertIn("already used", sent[-1][1]["reason"])
+
+    @patch("network.server.play_sound", lambda *_: None)
+    def test_reset_preserves_player_profile(self):
+        server = self.make_server()
+        server.players[1]["name"] = "Alice"
+        server.players[1]["color"] = "#123456"
+        server.spawn_player_items = lambda: None
+        server.spawn_powerups = lambda: None
+        server.broadcast_state = lambda: None
+        server.start_periodic_spawner = lambda: None
+
+        server.reset_game()
+
+        self.assertEqual(server.players[1]["name"], "Alice")
+        self.assertEqual(server.players[1]["color"], "#123456")
+
     @patch("network.server.play_sound", lambda *_: None)
     def test_powerups_are_collected_into_fixed_slots(self):
         server = self.make_server()
@@ -120,7 +164,7 @@ class MultiplayerRulesTest(unittest.TestCase):
         }
         server.player_powerups[1][1] = "shield"
 
-        server.process_client_powerup(1, 1)
+        server.process_client_powerup(1, 1, target_id=2)
 
         self.assertEqual(server.player_items[2], {destination})
         self.assertEqual(server.player_item_keys[2][destination], "VAULT|XBVMU|2")
@@ -130,8 +174,29 @@ class MultiplayerRulesTest(unittest.TestCase):
     def test_powerup_two_is_not_consumed_without_opponent_item(self):
         server = self.make_server()
         server.player_powerups[1][1] = "shield"
-        server.process_client_powerup(1, 1)
+        server.process_client_powerup(1, 1, target_id=2)
         self.assertEqual(server.player_powerups[1][1], "shield")
+
+    def test_powerup_two_lists_only_players_with_locally_discovered_items(self):
+        app = GridGameApp.__new__(GridGameApp)
+        app.my_player_id = 1
+        app.players = {1: {}, 2: {}, 3: {}}
+        app.per_player_data = {
+            1: {"visited": {(2, 2)}},
+            2: {"items": {(2, 2), (5, 5)}},
+            3: {"items": {(4, 4)}},
+        }
+        self.assertEqual(set(app.eligible_item_displacement_players()), {2})
+
+    def test_host_item_discovery_is_private_and_owner_neutral(self):
+        server = self.make_server()
+        server.player_items = {1: {(2, 2)}, 2: {(3, 3)}}
+        server.host_discovered_items = {(2, 2)}
+        app = GridGameApp.__new__(GridGameApp)
+        app.server = server
+
+        self.assertEqual(app.host_visible_items(), {(2, 2)})
+        self.assertNotIn("host_discovered_items", server._build_state(1))
 
 
 class EnterVaultTest(unittest.TestCase):
@@ -199,6 +264,20 @@ class VisibilityTest(unittest.TestCase):
 
         self.assertEqual(len(app.canvas.rectangles), 1)
         self.assertEqual(len(app.canvas.ovals), 1)
+
+
+class VaultLayoutTest(unittest.TestCase):
+    def test_hard_mode_uses_four_keyholes_in_two_by_two_grid(self):
+        self.assertEqual(
+            LockScreenDialog.panel_grid_positions(4),
+            [(0, 0), (0, 1), (1, 0), (1, 1)],
+        )
+
+    def test_three_keyholes_remain_in_one_row(self):
+        self.assertEqual(
+            LockScreenDialog.panel_grid_positions(3),
+            [(0, 0), (0, 1), (0, 2)],
+        )
 
 
 if __name__ == "__main__":

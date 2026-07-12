@@ -7,7 +7,9 @@ from config import (
     CANVAS_WIDTH, CANVAS_HEIGHT, COLORS, COLOR_NAMES, play_sound
 )
 from network import GridServer, GridClient
-from gui.dialogs import CustomIPDialog, CustomPlayerCountDialog, CustomLockDialog, LockScreenDialog, TeleportDialog, CustomDifficultyDialog
+from gui.dialogs import (CustomDifficultyDialog, CustomIPDialog, CustomLockDialog,
+                         CustomPlayerCountDialog, LockScreenDialog, PlayerProfileDialog,
+                         TeleportDialog)
 
 # Powerup display metadata (mirrors POWERUPS list in server.py)
 _WORDS_EASY = ["SECRET", "VAULT", "CIPHER", "MATRIX", "HACKER", "SHIELD", "SYSTEM", "KERNEL", "BINARY", "ROUTER", "CODING", "DECODE"]
@@ -100,6 +102,7 @@ class GridGameApp:
         # UI view structures
         self.current_frame = None
         self.slot_status_labels = []
+        self.slot_title_labels = []
         self.show_title_screen()
 
         # Key Bindings
@@ -392,6 +395,7 @@ class GridGameApp:
         self.lobby_container.pack(pady=20)
 
         self.slot_status_labels = []
+        self.slot_title_labels = []
         max_p = getattr(self, "max_players", 6)
 
         for i in range(1, max_p + 1):
@@ -422,6 +426,7 @@ class GridGameApp:
                 font=self.score_font
             )
             lbl_title.pack(anchor="w", padx=20, pady=(15, 5))
+            self.slot_title_labels.append(lbl_title)
 
             lbl_status = tk.Label(
                 card,
@@ -447,6 +452,11 @@ class GridGameApp:
             lbl_status = self.slot_status_labels[i - 1]
             if i in current_players:
                 p_info = current_players[i]
+                if i - 1 < len(self.slot_title_labels):
+                    self.slot_title_labels[i - 1].config(
+                        text=f"{p_info.get('name', f'Player {i}')} (P{i})",
+                        fg=p_info.get("color", COLORS[(i - 1) % len(COLORS)])
+                    )
                 player_prefix = "YOU - " if self.is_client and i == self.my_player_id else ""
                 if p_info.get("ready", False):
                     lbl_status.config(
@@ -459,6 +469,11 @@ class GridGameApp:
                         fg="#ff4d4d"
                     )
             else:
+                if i - 1 < len(self.slot_title_labels):
+                    self.slot_title_labels[i - 1].config(
+                        text=f"PLAYER {i} ({COLOR_NAMES[(i - 1) % len(COLOR_NAMES)]})",
+                        fg=COLORS[(i - 1) % len(COLORS)]
+                    )
                 lbl_status.config(
                     text="Waiting for player...",
                     fg="#5f5f6e"
@@ -476,6 +491,12 @@ class GridGameApp:
             ip_list = [f"P{p_id}: {info['ip']}" for p_id, info in current_players.items()]
             ips_text = " | ".join(ip_list) if ip_list else "Waiting for connections..."
             self.lbl_ips.config(text=f"Connected: {ips_text}")
+        elif self.my_player_id in current_players and hasattr(self, "lbl_lobby_title"):
+            mine = current_players[self.my_player_id]
+            self.lbl_lobby_title.config(
+                text=f"MULTIPLAYER LOBBY - {mine.get('name', f'Player {self.my_player_id}')} (P{self.my_player_id})",
+                fg=mine.get("color", "#ffd24d")
+            )
 
     def on_server_game_update(self):
         if self.server:
@@ -754,7 +775,7 @@ class GridGameApp:
             total = self.items_per_player * num_players
             found = sum(len(d.get("collected", {})) for d in self.per_player_data.values())
             self.lbl_items.config(text=f"ITEMS: {found}/{total}")
-        ip_list = [f"P{p_id}: {info['ip']} ({COLOR_NAMES[(p_id-1)%len(COLOR_NAMES)]})" 
+        ip_list = [f"{info.get('name', f'Player {p_id}')} (P{p_id}): {info['ip']}"
                    for p_id, info in self.players.items()]
         ips_text = " | ".join(ip_list) if ip_list else "Waiting for connections..."
         self.lbl_ips.config(text=ips_text)
@@ -786,6 +807,7 @@ class GridGameApp:
             moves_count = p_info.get("moves", 0)
             scores.append({
                 "id": p_id,
+                "name": p_info.get("name", f"Player {p_id}"),
                 "color": p_info["color"],
                 "moves": moves_count,
                 "items": items_count
@@ -845,7 +867,7 @@ class GridGameApp:
 
             lbl_player = tk.Label(
                 row_frame,
-                text=f"PLAYER {p_id}",
+                text=item["name"],
                 fg="#ffffff",
                 bg=row_frame["bg"],
                 font=("Segoe UI", 10, "bold")
@@ -917,6 +939,7 @@ class GridGameApp:
         self.lbl_lobby_title.pack(side="left", padx=20, pady=15)
 
         self.client_is_ready = False
+        self.profile_prompted = False
         self.btn_ready = tk.Button(
             self.header,
             text="READY",
@@ -933,6 +956,14 @@ class GridGameApp:
             cursor="hand2"
         )
         self.btn_ready.pack(side="right", padx=10, pady=12)
+
+        self.btn_profile = tk.Button(
+            self.header, text="EDIT PROFILE", command=self.edit_profile_action,
+            bg="#313143", fg="#ffffff", activebackground="#42425b",
+            activeforeground="#ffffff", state="disabled", bd=0,
+            padx=15, pady=5, font=self.score_font, cursor="hand2"
+        )
+        self.btn_profile.pack(side="right", padx=5, pady=12)
 
         self.btn_back = tk.Button(
             self.header,
@@ -970,7 +1001,10 @@ class GridGameApp:
             on_state_update=lambda: self.root.after(0, self.on_client_state_update),
             on_disconnect=lambda: self.root.after(0, self.on_client_disconnect),
             on_lobby_full=lambda: self.root.after(0, self.on_client_lobby_full),
-            on_unlock_result=lambda success: self.root.after(0, lambda: self.on_unlock_result_received(success))
+            on_unlock_result=lambda success: self.root.after(0, lambda: self.on_unlock_result_received(success)),
+            on_profile_result=lambda success, reason: self.root.after(
+                0, lambda: self.on_profile_result_received(success, reason)
+            )
         )
         
         if not self.client.connect():
@@ -983,7 +1017,28 @@ class GridGameApp:
         self.lbl_lobby_title.config(text=f"MULTIPLAYER LOBBY - PLAYER {p_id}")
         self.lbl_status_desc.config(text="Toggle ready status to let the Host start...")
         self.btn_ready.config(state="normal", bg="#55ff55", fg="#121214")
+        self.btn_profile.config(state="normal")
         self.build_lobby_slots_ui()
+        if not self.profile_prompted:
+            self.profile_prompted = True
+            self.root.after(100, self.edit_profile_action)
+
+    def edit_profile_action(self):
+        if not self.client or not self.my_player_id or self.game_started:
+            return
+        player = self.players.get(self.my_player_id, {})
+        result = PlayerProfileDialog(
+            self.root, self.button_font,
+            player.get("name", f"Player {self.my_player_id}"),
+            player.get("color", COLORS[(self.my_player_id - 1) % len(COLORS)]),
+            COLORS,
+        ).show()
+        if result:
+            self.client.send_profile(*result)
+
+    def on_profile_result_received(self, success, reason):
+        if not success:
+            messagebox.showerror("Profile Not Updated", reason or "The host rejected that profile.")
 
     def on_client_lobby_full(self):
         messagebox.showerror("Lobby Full", "The server lobby is currently full (max 6 players).")
@@ -1248,9 +1303,10 @@ class GridGameApp:
             info = self.players[my_id]
             self.lbl_pos.config(text=f"POSITION: ({info['c']}, {info['r']})")
             
-            color_name = COLOR_NAMES[(my_id - 1) % len(COLORS)]
-            color_hex = COLORS[(my_id - 1) % len(COLORS)]
-            self.lbl_player_id.config(text=f"PLAYER {my_id} ({color_name})", fg=color_hex)
+            self.lbl_player_id.config(
+                text=f"{info.get('name', f'Player {my_id}')} (P{my_id})",
+                fg=info.get("color", COLORS[(my_id - 1) % len(COLORS)])
+            )
             
         self.lbl_moves.config(text=f"MOVES: {self.moves}")
         if hasattr(self, 'lbl_items') and self.my_player_id in self.per_player_data:
@@ -1415,8 +1471,34 @@ class GridGameApp:
 
             if pu == "speed":
                 self.show_player_teleport_selection_dialog(slot)
+            elif pu == "shield":
+                self.show_item_displacement_selection_dialog(slot)
             else:
                 self.send_powerup_use(slot, None)
+
+    def show_item_displacement_selection_dialog(self, slot):
+        eligible_players = self.eligible_item_displacement_players()
+        if not eligible_players:
+            play_sound("qte_wrong")
+            messagebox.showinfo(
+                "No Discovered Items",
+                "Discover an opponent's item before using Move Item."
+            )
+            return
+        TeleportDialog(
+            self.root, self.button_font, eligible_players, self.my_player_id,
+            lambda target_id: self.send_powerup_use(slot, target_id),
+            COLORS, COLOR_NAMES, title="CHOOSE PLAYER WHOSE ITEM WILL MOVE"
+        )
+
+    def eligible_item_displacement_players(self):
+        my_visited = self.per_player_data.get(self.my_player_id, {}).get("visited", set())
+        return {
+            p_id: player
+            for p_id, player in self.players.items()
+            if p_id != self.my_player_id
+            and bool(self.per_player_data.get(p_id, {}).get("items", set()) & my_visited)
+        }
 
     def show_player_teleport_selection_dialog(self, slot):
         TeleportDialog(
@@ -1636,6 +1718,12 @@ class GridGameApp:
         finished = set(self.client.finished_players)
         return {p_id: player for p_id, player in self.players.items() if p_id not in finished}
 
+    def host_visible_items(self):
+        if not self.server:
+            return set()
+        remaining = set().union(*self.server.player_items.values()) if self.server.player_items else set()
+        return self.server.host_discovered_items & remaining
+
     def draw_elements(self):
         if not self.in_active_game and not self.my_player_id == "solo":
             return
@@ -1643,6 +1731,7 @@ class GridGameApp:
         if hasattr(self, 'is_host') and self.is_host:
             max_p = getattr(self, "max_players", 6)
             focused = getattr(self, "focused_slot", None)
+            host_items = self.host_visible_items()
             
             for slot_id in range(1, max_p + 1):
                 card = self.spectator_cards.get(slot_id)
@@ -1694,7 +1783,7 @@ class GridGameApp:
                     items = p_data.get("items", set())
                     collected = p_data.get("collected", {})
                     p_color = p_info["color"]
-                    color_name = COLOR_NAMES[(p_id - 1) % len(COLORS)]
+                    player_name = p_info.get("name", f"Player {p_id}")
 
                     # Determine text and token sizes based on split_size
                     if split_size == 36:
@@ -1766,6 +1855,22 @@ class GridGameApp:
                                     font=arrow_font
                                 )
 
+                    # Host-only neutral markers reveal no item ownership.
+                    for r, c in host_items:
+                        margin = max(2, split_size // 4)
+                        ix1 = c * split_size + margin
+                        iy1 = r * split_size + margin
+                        ix2 = (c + 1) * split_size - margin
+                        iy2 = (r + 1) * split_size - margin
+                        canvas.create_rectangle(
+                            ix1, iy1, ix2, iy2,
+                            fill="#1a1a24", outline="#d7d7df", width=2
+                        )
+                        canvas.create_text(
+                            (ix1 + ix2) // 2, (iy1 + iy2) // 2,
+                            text="?", fill="#d7d7df", font=flag_font
+                        )
+
                     pr, pc = p_info["r"], p_info["c"]
                     px1 = pc * split_size + p_margin
                     py1 = pr * split_size + p_margin
@@ -1785,7 +1890,7 @@ class GridGameApp:
                         fill="#ffffff", outline=""
                     )
 
-                    lbl_title.config(text="PLAYER " + str(p_id) + " (" + color_name + ")", fg=p_color)
+                    lbl_title.config(text=player_name + " (P" + str(p_id) + ")", fg=p_color)
                     moves = p_info.get("moves", 0)
                     items_found = len(collected)
                     lbl_stats.config(
@@ -1852,6 +1957,11 @@ class GridGameApp:
             self.canvas.create_oval(
                 px1+10, py1+10, px2-10, py2-10,
                 fill="#ffffff", outline="", tags="player_element"
+            )
+            self.canvas.create_text(
+                (px1 + px2) // 2, (py1 + py2) // 2,
+                text=p.get("name", f"P{p_id}")[:2].upper(), fill="#121214",
+                font=("Segoe UI", 8, "bold"), tags="player_element"
             )
 
         # 3. QTE Overlay
@@ -2290,7 +2400,7 @@ class GridGameApp:
                 )
                 self.canvas.create_text(
                     (x1 + x2) // 2, (y1 + y2) // 2,
-                    text=f"P{owner_id}", fill=color,
+                    text=self.players.get(owner_id, {}).get("name", f"P{owner_id}")[:6], fill=color,
                     font=("Segoe UI", 9, "bold"), tags="shared_item_element"
                 )
 

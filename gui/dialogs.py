@@ -1,8 +1,95 @@
 import tkinter as tk
-from tkinter import font
+from tkinter import colorchooser, font
 import threading
 
 from network.discovery import discover_games
+
+
+class PlayerProfileDialog:
+    def __init__(self, parent, button_font, name, color, preset_colors):
+        self.parent = parent
+        self.button_font = button_font
+        self.name = name
+        self.color = color
+        self.preset_colors = preset_colors
+
+    def show(self):
+        result = {"value": None}
+        selected_color = tk.StringVar(value=self.color)
+        dialog = tk.Toplevel(self.parent)
+        dialog.title("Player Profile")
+        dialog.configure(bg="#121214")
+        dialog.resizable(False, False)
+
+        width, height = 480, 370
+        x = self.parent.winfo_x() + self.parent.winfo_width() // 2 - width // 2
+        y = self.parent.winfo_y() + self.parent.winfo_height() // 2 - height // 2
+        dialog.geometry(f"{width}x{height}+{x}+{y}")
+        dialog.transient(self.parent)
+        dialog.grab_set()
+
+        tk.Label(dialog, text="PLAYER PROFILE", fg="#00d2ff", bg="#121214",
+                 font=font.Font(family="Segoe UI", size=16, weight="bold")).pack(pady=(22, 16))
+        tk.Label(dialog, text="DISPLAY NAME", fg="#8c8c9a", bg="#121214",
+                 font=font.Font(family="Segoe UI", size=9, weight="bold")).pack()
+        entry = tk.Entry(dialog, bg="#1a1a24", fg="#ffffff", insertbackground="#ffffff",
+                         justify="center", bd=0,
+                         font=font.Font(family="Segoe UI", size=12))
+        entry.pack(fill="x", padx=55, pady=(5, 18), ipady=8)
+        entry.insert(0, self.name)
+        entry.select_range(0, tk.END)
+
+        tk.Label(dialog, text="PLAYER COLOR", fg="#8c8c9a", bg="#121214",
+                 font=font.Font(family="Segoe UI", size=9, weight="bold")).pack()
+        swatches = tk.Frame(dialog, bg="#121214")
+        swatches.pack(pady=10)
+        preview = tk.Label(dialog, text=selected_color.get().upper(), fg="#121214",
+                           bg=selected_color.get(), width=18, pady=5,
+                           font=font.Font(family="Segoe UI", size=9, weight="bold"))
+
+        def choose(value):
+            selected_color.set(value.lower())
+            preview.config(text=value.upper(), bg=value)
+
+        for value in self.preset_colors:
+            tk.Button(swatches, bg=value, activebackground=value, bd=0,
+                      width=4, height=2, cursor="hand2",
+                      command=lambda v=value: choose(v)).pack(side="left", padx=5)
+
+        def choose_custom():
+            picked = colorchooser.askcolor(color=selected_color.get(), parent=dialog)[1]
+            if picked:
+                choose(picked)
+
+        tk.Button(swatches, text="+", command=choose_custom, bg="#313143", fg="#ffffff",
+                  activebackground="#42425b", activeforeground="#ffffff", bd=0,
+                  width=4, height=2, cursor="hand2", font=self.button_font).pack(side="left", padx=5)
+        preview.pack(pady=(0, 15))
+
+        def close():
+            dialog.destroy()
+
+        def save():
+            name = " ".join(entry.get().split())[:16]
+            if name:
+                result["value"] = (name, selected_color.get())
+                dialog.destroy()
+
+        buttons = tk.Frame(dialog, bg="#121214")
+        buttons.pack(fill="x", padx=55, pady=6)
+        tk.Button(buttons, text="CANCEL", command=close, bg="#212128", fg="#8c8c9a",
+                  activebackground="#ff4d4d", activeforeground="#ffffff", bd=0,
+                  width=15, pady=8, cursor="hand2", font=self.button_font).pack(side="left")
+        tk.Button(buttons, text="SAVE PROFILE", command=save, bg="#00d2ff", fg="#121214",
+                  activebackground="#00a3cc", activeforeground="#121214", bd=0,
+                  width=15, pady=8, cursor="hand2", font=self.button_font).pack(side="right")
+
+        entry.bind("<Return>", lambda e: save())
+        entry.bind("<Escape>", lambda e: close())
+        dialog.protocol("WM_DELETE_WINDOW", close)
+        entry.focus_set()
+        self.parent.wait_window(dialog)
+        return result["value"]
 
 class CustomIPDialog:
     def __init__(self, parent, button_font):
@@ -590,8 +677,10 @@ class CustomLockDialog:
 
 
 class LockScreenDialog:
-    """3-keyhole vault screen. items_data is a list of 3 dicts:
-      { "index": int (1-3), "pos": (r,c), "key": str|None, "collected": bool, "discovered": bool }
+    """Dynamic vault screen for three or four item keyholes.
+
+    items_data entries contain:
+      { "index": int, "pos": (r,c), "key": str|None, "collected": bool, "discovered": bool }
     on_submit(pos, entered_key) should return True (success), False (wrong), or None (async).
     """
     def __init__(self, parent, button_font, items_data, on_submit):
@@ -600,6 +689,11 @@ class LockScreenDialog:
         self.items_data = items_data
         self.on_submit = on_submit
 
+    @staticmethod
+    def panel_grid_positions(item_count):
+        columns = 2 if item_count == 4 else max(1, item_count)
+        return [(index // columns, index % columns) for index in range(item_count)]
+
     def show(self):
         dialog = tk.Toplevel(self.parent)
         dialog.title("Security Vault")
@@ -607,8 +701,9 @@ class LockScreenDialog:
         dialog.resizable(False, False)
 
         n   = len(self.items_data)
-        dw  = max(680, 200 * n + 80)   # scale width with panel count
-        dh  = 400
+        four_key_mode = n == 4
+        dw = 500 if four_key_mode else max(680, 200 * n + 80)
+        dh = 690 if four_key_mode else 400
         px  = self.parent.winfo_x()
         py  = self.parent.winfo_y()
         pw  = self.parent.winfo_width()
@@ -628,13 +723,17 @@ class LockScreenDialog:
                  ).pack(pady=(0, 14))
 
         # Dynamic keyhole panels
-        row = tk.Frame(dialog, bg="#0e0e16")
-        row.pack(fill="x", padx=18)
-        for col in range(n):
-            row.columnconfigure(col, weight=1, uniform="keyhole")
+        panel_grid = tk.Frame(dialog, bg="#0e0e16")
+        panel_grid.pack(fill="both", expand=True, padx=18)
+        column_count = 2 if four_key_mode else max(1, n)
+        row_count = 2 if four_key_mode else 1
+        for col in range(column_count):
+            panel_grid.columnconfigure(col, weight=1, uniform="keyhole")
+        for row in range(row_count):
+            panel_grid.rowconfigure(row, weight=1, uniform="keyhole_row")
 
-        for i, item in enumerate(self.items_data):
-            self._build_panel(row, item, dialog, col=i)
+        for item, (row, col) in zip(self.items_data, self.panel_grid_positions(n)):
+            self._build_panel(panel_grid, item, dialog, row=row, col=col)
 
         # Close
         tk.Button(dialog, text="CLOSE", command=dialog.destroy,
@@ -646,7 +745,7 @@ class LockScreenDialog:
 
         self.parent.wait_window(dialog)
 
-    def _build_panel(self, parent, item, dialog, col=0):
+    def _build_panel(self, parent, item, dialog, row=0, col=0):
         idx        = item["index"]
         pos        = item["pos"]
         key        = item["key"]
@@ -654,10 +753,10 @@ class LockScreenDialog:
         discovered = item["discovered"]
         is_at      = item.get("is_at", False)  # player is standing on this item
 
-        # Fixed-size panel so all 3 are identical regardless of content
+        # Fixed-size panel so all keyholes are identical regardless of content.
         panel = tk.Frame(parent, bg="#1a1a24", bd=2, relief="groove",
                          width=180, height=260)
-        panel.grid(row=0, column=col, sticky="nsew", padx=7, pady=4)
+        panel.grid(row=row, column=col, sticky="nsew", padx=7, pady=4)
         panel.pack_propagate(False)   # prevent content from resizing the frame
 
         tk.Label(panel, text=f"KEYHOLE  #{idx}",
@@ -780,7 +879,8 @@ class LockScreenDialog:
 
 
 class TeleportDialog:
-    def __init__(self, parent, button_font, players_info, my_id, on_select, colors, color_names):
+    def __init__(self, parent, button_font, players_info, my_id, on_select, colors, color_names,
+                 title="CHOOSE PLAYER TO TELEPORT"):
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("Teleport Powerup")
         self.dialog.geometry("380x350")
@@ -803,7 +903,7 @@ class TeleportDialog:
 
         lbl_title = tk.Label(
             self.dialog,
-            text="CHOOSE PLAYER TO TELEPORT",
+            text=title,
             fg="#ffd24d",
             bg="#121214",
             font=font.Font(family="Segoe UI", size=13, weight="bold")
@@ -861,11 +961,11 @@ class TeleportDialog:
 
             for pid, pinfo in other_players:
                 color_hex = pinfo.get("color", colors[(pid - 1) % len(colors)])
-                color_name = color_names[(pid - 1) % len(color_names)]
+                player_name = pinfo.get("name", f"Player {pid}")
                 
                 btn = tk.Button(
                     frame_buttons,
-                    text=f"PLAYER {pid} ({color_name})",
+                    text=f"{player_name} (P{pid})",
                     bg=color_hex,
                     fg="#121214" if color_hex != "#121214" else "#ffffff",
                     activebackground=color_hex,
