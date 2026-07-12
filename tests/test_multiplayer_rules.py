@@ -24,9 +24,38 @@ class MultiplayerRulesTest(unittest.TestCase):
     @patch("network.server.play_sound", lambda *_: None)
     def test_players_can_cross_other_trails_and_positions(self):
         server = self.make_server()
+        server.player_collected[2][(0, 1)] = server.players[2]["color"]
         server.process_client_move(1, 0, 1)
         self.assertEqual((server.players[1]["r"], server.players[1]["c"]), (0, 1))
         self.assertIn((0, 1), server.player_visited[1])
+
+    @patch("gui.app.play_sound", lambda *_: None)
+    @patch("gui.app.time.time", return_value=10.0)
+    def test_client_qte_uses_only_its_own_unlocked_grids(self, _time):
+        app = GridGameApp.__new__(GridGameApp)
+        app.in_game = True
+        app.in_active_game = True
+        app.is_client = True
+        app.my_player_id = 1
+        app.players = {
+            1: {"r": 0, "c": 0},
+            2: {"r": 0, "c": 1},
+        }
+        app.client = type("Client", (), {
+            "finished_players": [],
+            "get_my_visited": lambda self: {(0, 0)},
+        })()
+        app.qte_active = False
+        app.last_move_time = 0.0
+        app.last_qte_key_time = 0.0
+        app.qte_sequence = []
+        app.qte_progress = 0
+        app.draw_elements = lambda: None
+
+        app.move_player(0, 1)
+
+        self.assertTrue(app.qte_active)
+        self.assertEqual(app.qte_target_move, (0, 1))
 
     def test_state_shares_items_but_only_own_vault_keys(self):
         server = self.make_server()
