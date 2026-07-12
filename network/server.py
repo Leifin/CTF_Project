@@ -57,6 +57,8 @@ class GridServer:
 
         # Finish order — p_ids appended in the order they collect all items
         self.finished_players = []  # [p_id, ...]  (ordered by completion time)
+        self.finish_target = 1
+        self.match_finished = False
 
         # Difficulty state
         self.difficulty            = "easy"
@@ -80,6 +82,14 @@ class GridServer:
             if pid != p_id:
                 result |= v
         return result
+
+    @staticmethod
+    def finish_target_for(player_count):
+        if player_count >= 4:
+            return 3
+        if player_count == 3:
+            return 2
+        return 1
 
     def spawn_player_items(self):
         """Spawn items_per_player unique items for every player, each with a Caesar cipher clue."""
@@ -126,9 +136,11 @@ class GridServer:
     def start_periodic_spawner(self):
         self.spawner_active = True
         def spawner_loop():
-            while self.server_running and self.game_started and getattr(self, "spawner_active", False):
+            while (self.server_running and self.game_started and not self.match_finished
+                   and getattr(self, "spawner_active", False)):
                 time.sleep(60)
-                if not (self.server_running and self.game_started and getattr(self, "spawner_active", False)):
+                if not (self.server_running and self.game_started and not self.match_finished
+                        and getattr(self, "spawner_active", False)):
                     break
                 
                 # Spawn 1 of each powerup type anywhere on the grid
@@ -265,7 +277,7 @@ class GridServer:
 
     # ------------------------------------------------------------------
     def process_client_move(self, p_id, dr, dc):
-        if p_id not in self.players or not self.game_started:
+        if p_id not in self.players or not self.game_started or self.match_finished:
             return
         # Finished players are locked in place — they cannot move
         if p_id in self.finished_players:
@@ -310,7 +322,7 @@ class GridServer:
     # ------------------------------------------------------------------
     def process_client_unlock(self, p_id, r, c, entered_key):
         """Check if the entered key matches the specified item cell. Player must be standing on it."""
-        if p_id not in self.players or not self.game_started:
+        if p_id not in self.players or not self.game_started or self.match_finished:
             return
         if r is None or c is None:
             return
@@ -340,9 +352,12 @@ class GridServer:
                 del self.player_item_keys[p_id][pos]
                 self.player_collected[p_id][pos] = self.players[p_id]["color"]
                 play_sound("collect")
-                # Record finish order when all 3 items collected
+                # Record finish order when all required items are collected.
                 if len(self.player_collected[p_id]) >= self.items_per_player and p_id not in self.finished_players:
                     self.finished_players.append(p_id)
+                    if len(self.finished_players) >= self.finish_target:
+                        self.match_finished = True
+                        self.cell_close_timer_active = False
                 self._send_to(p_id, {"type": "unlock_result", "success": True})
                 if self.on_game_update:
                     self.on_game_update()
@@ -355,7 +370,7 @@ class GridServer:
             self._send_to(p_id, {"type": "unlock_result", "success": False})
 
     def process_client_powerup(self, p_id, slot, target_id=None):
-        if p_id not in self.players or not self.game_started:
+        if p_id not in self.players or not self.game_started or self.match_finished:
             return
         slots = self.player_powerups.get(p_id, [None, None, None])
         if slot < 0 or slot >= 3 or slots[slot] is None:
@@ -488,6 +503,8 @@ class GridServer:
                 for (r, c), pu_id in self.powerups.items()
             ],
             "finished_players": list(self.finished_players),
+            "finish_target": self.finish_target,
+            "match_finished": self.match_finished,
             "difficulty": self.difficulty,
             "items_per_player": self.items_per_player
         }
@@ -506,6 +523,8 @@ class GridServer:
         self.items_per_player  = 4 if difficulty == "hard" else 3
         self.game_started      = True
         self.finished_players  = []
+        self.finish_target     = self.finish_target_for(len(self.players))
+        self.match_finished    = False
         self.cell_close_timer_active = False
         self.spawn_player_items()
         self.spawn_powerups()
@@ -528,6 +547,8 @@ class GridServer:
             self.player_item_keys[p_id] = {}
             self.player_powerups[p_id]  = [None, None, None]
         self.finished_players = []
+        self.finish_target = self.finish_target_for(len(self.players))
+        self.match_finished = False
         self.cell_close_timer_active = False
         self.spawn_player_items()
         self.spawn_powerups()
@@ -544,7 +565,8 @@ class GridServer:
         """Hard mode: every 30 s re-close 2-5 visited cells per player."""
         self.cell_close_timer_active = True
         def _tick():
-            if not self.game_started or not self.server_running or not self.cell_close_timer_active:
+            if (not self.game_started or self.match_finished or not self.server_running
+                    or not self.cell_close_timer_active):
                 return
             self._close_random_cells()
             threading.Timer(30.0, _tick).start()
