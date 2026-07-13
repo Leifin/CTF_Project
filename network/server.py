@@ -33,7 +33,16 @@ def make_caesar_clue(difficulty="easy"):
     for char in word:
         shifted = (ord(char) - ord('A') + shift) % 26
         cipher.append(chr(ord('A') + shifted))
-    return f"{word}|{''.join(cipher)}|{shift}"
+    mode = "encrypt" if difficulty == "hard" else "decrypt"
+    return f"{word}|{''.join(cipher)}|{shift}|{mode}"
+
+def expected_caesar_answer(clue):
+    parts = str(clue or "").split("|")
+    if len(parts) < 3:
+        return str(clue or "")
+    word, cipher = parts[0], parts[1]
+    mode = parts[3] if len(parts) >= 4 else "decrypt"
+    return cipher if mode == "encrypt" else word
 
 class GridServer:
     def __init__(self, port=5555, max_players=4, on_lobby_update=None, on_game_update=None):
@@ -311,7 +320,9 @@ class GridServer:
         self.broadcast_state()
 
     def process_client_profile(self, p_id, name, color):
-        if p_id not in self.players or self.game_started:
+        if (p_id not in self.players
+                or (self.game_started and not self.match_finished
+                    and p_id not in self.finished_players)):
             self._send_to(p_id, {
                 "type": "profile_result", "success": False,
                 "reason": "Profiles can only be changed in the lobby.",
@@ -375,7 +386,9 @@ class GridServer:
         return True
 
     def process_client_chat(self, p_id, text):
-        if p_id not in self.players or self.game_started:
+        if (p_id not in self.players
+                or (self.game_started and not self.match_finished
+                    and p_id not in self.finished_players)):
             return False
         player = self.players[p_id]
         return self._append_chat(
@@ -384,7 +397,7 @@ class GridServer:
         )
 
     def send_host_chat(self, text):
-        if self.game_started:
+        if self.game_started and not self.match_finished:
             return False
         return self._append_chat("host", "HOST", "#ffd24d", text)
 
@@ -455,11 +468,7 @@ class GridServer:
 
         if pos in items:
             stored_key = item_keys.get(pos)
-            correct_word = ""
-            if stored_key and "|" in stored_key:
-                correct_word = stored_key.split("|")[0]
-            else:
-                correct_word = str(stored_key)
+            correct_word = expected_caesar_answer(stored_key)
 
             if correct_word and str(entered_key).strip().upper() == correct_word.upper():
                 # Correct — collect the item

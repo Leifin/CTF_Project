@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 from gui.app import GridGameApp
 from gui.dialogs import LockScreenDialog
-from network.server import GridServer
+from network.server import GridServer, expected_caesar_answer as expected_server_answer
 
 
 class MultiplayerRulesTest(unittest.TestCase):
@@ -77,6 +77,27 @@ class MultiplayerRulesTest(unittest.TestCase):
             with self.subTest(players=players):
                 self.assertEqual(GridServer.finish_target_for(players), target)
 
+    def test_caesar_answers_switch_to_encryption_only_for_marked_clues(self):
+        decrypt_clue = "ALPHA|DOSKD|3|decrypt"
+        encrypt_clue = "ALPHA|DOSKD|3|encrypt"
+        legacy_clue = "ALPHA|DOSKD|3"
+        self.assertEqual(expected_server_answer(decrypt_clue), "ALPHA")
+        self.assertEqual(expected_server_answer(legacy_clue), "ALPHA")
+        self.assertEqual(expected_server_answer(encrypt_clue), "DOSKD")
+
+    @patch("network.server.play_sound", lambda *_: None)
+    def test_hard_mode_unlock_accepts_encrypted_word(self):
+        server = self.make_server()
+        server.items_per_player = 1
+        server.finish_target = 1
+        server.player_items[1] = {(0, 0)}
+        server.player_item_keys[1] = {(0, 0): "ALPHA|DOSKD|3|encrypt"}
+
+        server.process_client_unlock(1, 0, 0, "DOSKD")
+
+        self.assertEqual(server.player_items[1], set())
+        self.assertEqual(server.finished_players, [1])
+
     @patch("network.server.play_sound", lambda *_: None)
     def test_match_finishes_when_captured_threshold_is_reached(self):
         server = self.make_server()
@@ -140,6 +161,58 @@ class MultiplayerRulesTest(unittest.TestCase):
         })
         self.assertEqual(server.chat_history[-1]["kind"], "host")
         self.assertEqual(server.chat_history[-1]["name"], "HOST")
+
+    def test_chat_and_profile_changes_are_allowed_after_match_completion(self):
+        server = self.make_server()
+        server.game_started = True
+        server.match_finished = True
+        server.players[1]["name"] = "Player 1"
+        server.players[2]["color"] = "#654321"
+        sent = []
+        server._send_to = lambda p_id, msg: sent.append(msg)
+
+        self.assertTrue(server.process_client_chat(1, "post game message"))
+        server.process_client_profile(1, "Alice", "#123456")
+
+        self.assertEqual(server.players[1]["name"], "Alice")
+        self.assertTrue(sent[-1]["success"])
+
+    def test_early_finisher_can_use_lobby_chat_while_match_continues(self):
+        server = self.make_server()
+        server.game_started = True
+        server.match_finished = False
+        server.finished_players = [1]
+
+        self.assertTrue(server.process_client_chat(1, "waiting in lobby"))
+        self.assertEqual(server.chat_history[-1]["text"], "waiting in lobby")
+
+    def test_early_finisher_stays_in_connected_postgame_lobby(self):
+        app = GridGameApp.__new__(GridGameApp)
+        app.client = type("Client", (), {
+            "players": {1: {"r": 0, "c": 0}},
+            "per_player_data": {1: {"visited": {(0, 0)}, "items": set(), "collected": {}}},
+            "game_started": True,
+            "countdown": 0,
+            "finished_players": [1],
+            "match_finished": False,
+            "get_my_visited": lambda self: {(0, 0)},
+        })()
+        app.my_player_id = 1
+        app.players = {}
+        app.per_player_data = {}
+        app.moves = 0
+        app.last_known_server_pos = None
+        app.qte_active = False
+        app.client_cell_arrows = {}
+        app.viewing_postgame_lobby = True
+        app.countdown_active = False
+        updates = []
+        app.update_lobby_ui = lambda: updates.append("lobby")
+        app.start_client_active_game_screen = lambda: updates.append("game")
+
+        app.on_client_state_update()
+
+        self.assertEqual(updates, ["lobby"])
 
     def test_chat_rejects_blank_messages_and_bounds_history(self):
         server = self.make_server()
@@ -205,6 +278,23 @@ class MultiplayerRulesTest(unittest.TestCase):
         server.player_powerups[1][1] = "shield"
         server.process_client_powerup(1, 1, target_id=2)
         self.assertEqual(server.player_powerups[1][1], "shield")
+
+    @patch("network.server.play_sound", lambda *_: None)
+    @patch("network.server.random.randint", side_effect=[9, 19])
+    def test_powerup_three_can_teleport_the_activating_player(self, _randint):
+        server = self.make_server()
+        destination = (9, 19)
+        server.player_visited[1] = {
+            (r, c) for r in range(10) for c in range(20)
+            if (r, c) != destination
+        }
+        server.player_powerups[1][2] = "speed"
+
+        server.process_client_powerup(1, 2, target_id=1)
+
+        self.assertEqual((server.players[1]["r"], server.players[1]["c"]), destination)
+        self.assertIn(destination, server.player_visited[1])
+        self.assertIsNone(server.player_powerups[1][2])
 
     def test_powerup_two_lists_only_players_with_globally_discovered_items(self):
         app = GridGameApp.__new__(GridGameApp)
@@ -290,17 +380,18 @@ class VisibilityTest(unittest.TestCase):
         def __init__(self):
             self.rectangles = []
             self.ovals = []
+            self.texts = []
 
         def create_rectangle(self, *args, **kwargs):
             self.rectangles.append((args, kwargs))
 
         def create_text(self, *args, **kwargs):
-            pass
+            self.texts.append((args, kwargs))
 
         def create_oval(self, *args, **kwargs):
             self.ovals.append((args, kwargs))
 
-    def test_items_and_powerups_render_only_on_discovered_cells(self):
+    def test_items_require_discovery_but_unknown_powerups_show_question_mark(self):
         app = GridGameApp.__new__(GridGameApp)
         app.my_player_id = 1
         app.canvas = self.Canvas()
@@ -318,7 +409,13 @@ class VisibilityTest(unittest.TestCase):
         app._draw_map_powerups()
 
         self.assertEqual(len(app.canvas.rectangles), 1)
-        self.assertEqual(len(app.canvas.ovals), 1)
+        self.assertEqual(len(app.canvas.ovals), 2)
+        powerup_markers = [kwargs.get("text") for _, kwargs in app.canvas.texts]
+        self.assertIn("1", powerup_markers)
+        self.assertIn("?", powerup_markers)
+        outlines = [kwargs.get("outline") for _, kwargs in app.canvas.ovals]
+        self.assertIn("#ff9f1a", outlines)
+        self.assertIn("#8c8c9a", outlines)
 
 
 class VaultLayoutTest(unittest.TestCase):

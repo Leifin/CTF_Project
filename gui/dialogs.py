@@ -776,13 +776,19 @@ class LockScreenDialog:
         cipher_clue = ""
         formula_clue = ""
         if key and "|" in key:
-            parts = key.split("|", 2)
-            if len(parts) == 3:
-                orig_w, cipher_w, shift_str = parts
+            parts = key.split("|")
+            if len(parts) >= 3:
+                orig_w, cipher_w, shift_str = parts[:3]
+                mode = parts[3] if len(parts) >= 4 else "decrypt"
                 shift = int(shift_str)
-                sign = "-" if shift > 0 else "+"
-                cipher_clue = f"Cipher: {cipher_w}"
-                formula_clue = f"Formula: C {sign} {abs(shift)}"
+                if mode == "encrypt":
+                    sign = "+" if shift > 0 else "-"
+                    cipher_clue = f"Encrypt: {orig_w}"
+                    formula_clue = f"Formula: P {sign} {abs(shift)}"
+                else:
+                    sign = "-" if shift > 0 else "+"
+                    cipher_clue = f"Decrypt: {cipher_w}"
+                    formula_clue = f"Formula: C {sign} {abs(shift)}"
 
         if not discovered:
             # Not yet found on the map
@@ -880,7 +886,7 @@ class LockScreenDialog:
 
 class TeleportDialog:
     def __init__(self, parent, button_font, players_info, my_id, on_select, colors, color_names,
-                 title="CHOOSE PLAYER TO TELEPORT"):
+                 title="CHOOSE PLAYER TO TELEPORT", include_self=False):
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("Teleport Powerup")
         self.dialog.geometry("380x350")
@@ -924,11 +930,11 @@ class TeleportDialog:
             try:
                 p_id_int = int(pid)
                 my_id_int = int(my_id)
-            except ValueError:
+            except (ValueError, TypeError):
                 p_id_int = pid
                 my_id_int = my_id
                 
-            if p_id_int != my_id_int:
+            if include_self or p_id_int != my_id_int:
                 other_players.append((p_id_int, pinfo))
 
         if not other_players:
@@ -965,7 +971,7 @@ class TeleportDialog:
                 
                 btn = tk.Button(
                     frame_buttons,
-                    text=f"{player_name} (P{pid})",
+                    text=f"{player_name} (P{pid})" + (" - YOU" if str(pid) == str(my_id) else ""),
                     bg=color_hex,
                     fg="#121214" if color_hex != "#121214" else "#ffffff",
                     activebackground=color_hex,
