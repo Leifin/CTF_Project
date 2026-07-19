@@ -380,6 +380,15 @@ class MultiplayerRulesTest(unittest.TestCase):
         for powerup_id in ("reveal", "shield", "speed"):
             self.assertEqual(list(server.powerups.values()).count(powerup_id), 3)
 
+    def test_powerup_spawn_interval_depends_on_difficulty(self):
+        server = self.make_server()
+        for difficulty in ("easy", "medium"):
+            server.difficulty = difficulty
+            self.assertEqual(server.powerup_spawn_interval(), 30)
+
+        server.difficulty = "hard"
+        self.assertEqual(server.powerup_spawn_interval(), 15)
+
 
 class EnterVaultTest(unittest.TestCase):
     def test_enter_opens_multiplayer_vault_on_owned_item(self):

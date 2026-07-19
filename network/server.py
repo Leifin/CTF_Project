@@ -15,6 +15,8 @@ POWERUPS = [
 ]
 POWERUP_SLOTS = {"reveal": 0, "shield": 1, "speed": 2}
 MAX_MAP_POWERUPS_PER_TYPE = 3
+POWERUP_SPAWN_INTERVAL_SECONDS = 30
+HARD_POWERUP_SPAWN_INTERVAL_SECONDS = 15
 MAX_CHAT_MESSAGES = 100
 MAX_CHAT_LENGTH = 240
 
@@ -164,7 +166,7 @@ class GridServer:
         def spawner_loop():
             while (self.server_running and self.game_started and not self.match_finished
                    and getattr(self, "spawner_active", False)):
-                time.sleep(60)
+                time.sleep(self.powerup_spawn_interval())
                 if not (self.server_running and self.game_started and not self.match_finished
                         and getattr(self, "spawner_active", False)):
                     break
@@ -176,6 +178,11 @@ class GridServer:
                 self.broadcast_state()
                 
         threading.Thread(target=spawner_loop, daemon=True).start()
+
+    def powerup_spawn_interval(self):
+        return (HARD_POWERUP_SPAWN_INTERVAL_SECONDS
+                if self.difficulty == "hard"
+                else POWERUP_SPAWN_INTERVAL_SECONDS)
 
     def spawn_periodic_powerups_once(self):
         """Spawn at most one of each type without exceeding the per-type map cap."""
