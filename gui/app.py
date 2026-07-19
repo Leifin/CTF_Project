@@ -60,6 +60,7 @@ class GridGameApp:
             self.root.state("zoomed")   # Maximized on Windows
         except Exception:
             self.root.attributes("-fullscreen", True)
+        self.root.protocol("WM_DELETE_WINDOW", self.close_app)
 
 
         # Local Game States
@@ -96,6 +97,7 @@ class GridGameApp:
         # Difficulty
         self.difficulty       = "easy"
         self.game_mode        = GAME_MODE_SOLO
+        self.team_colors      = {}
         self.items_per_player = 3
         self.preferred_name = "Player"
         self.preferred_color = COLORS[0]
@@ -147,6 +149,13 @@ class GridGameApp:
         self.players.clear()
         self.per_player_data.clear()
 
+    def close_app(self):
+        self.cleanup_network()
+        try:
+            self.root.destroy()
+        except tk.TclError:
+            pass
+
     def show_title_screen(self):
         self.in_game = False
         self.is_host = False
@@ -154,6 +163,7 @@ class GridGameApp:
         self.game_started = False
         self.in_active_game = False
         self.game_mode = GAME_MODE_SOLO
+        self.team_colors = {}
         self.my_player_id = None
         self.qte_active = False
         self.qte_sequence = []
@@ -298,6 +308,7 @@ class GridGameApp:
         max_p, selected_mode = setup
         self.max_players = max_p
         self.game_mode = selected_mode
+        self.team_colors = {}
         self.is_host = True
         self.in_game = True
         self.game_started = False
@@ -415,6 +426,8 @@ class GridGameApp:
 
         self.team_status_labels = {}
         self.team_join_buttons = {}
+        self.team_title_labels = {}
+        self.team_role_title_labels = {}
         if self.lobby_layout_mode == GAME_MODE_DUO:
             self.build_duo_team_picker_ui()
             self.slot_status_labels = []
@@ -485,11 +498,13 @@ class GridGameApp:
 
         for team_id in range(1, self.duo_team_count() + 1):
             color = self.duo_team_color(team_id)
-            card = tk.Frame(row, bg="#1a1a24", bd=1, relief="solid", width=236, height=128)
+            card = tk.Frame(row, bg="#1a1a24", bd=1, relief="solid", width=236, height=146)
             card.pack(side="left", padx=4)
             card.pack_propagate(False)
-            tk.Label(card, text=f"TEAM {team_id}", fg=color, bg="#1a1a24",
-                     font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=10, pady=(8, 2))
+            team_title = tk.Label(card, text=f"TEAM {team_id}", fg=color, bg="#1a1a24",
+                                  font=("Segoe UI", 9, "bold"))
+            team_title.pack(anchor="w", padx=10, pady=(8, 2))
+            self.team_title_labels[team_id] = team_title
 
             role_row = tk.Frame(card, bg="#1a1a24")
             role_row.pack(fill="both", expand=True, padx=8, pady=(2, 8))
@@ -497,7 +512,7 @@ class GridGameApp:
                 role_box = tk.Frame(
                     role_row, bg="#212128", bd=1, relief="solid",
                     highlightthickness=1, highlightbackground="#313143",
-                    width=104, height=78,
+                    width=104, height=94,
                 )
                 role_box.pack(side="left", fill="both", expand=True, padx=3)
                 role_box.pack_propagate(False)
@@ -507,10 +522,11 @@ class GridGameApp:
                     font=("Segoe UI", 8, "bold")
                 )
                 title.pack(anchor="w", padx=8, pady=(6, 1))
+                self.team_role_title_labels[(team_id, role)] = title
                 occupant = tk.Label(
                     role_box, text="open", fg="#d7d7df", bg="#212128",
                     font=("Segoe UI", 8), anchor="w", justify="left",
-                    wraplength=84,
+                    wraplength=92,
                 )
                 occupant.pack(anchor="w", padx=8)
                 self.team_status_labels[(team_id, role)] = occupant
@@ -690,7 +706,17 @@ class GridGameApp:
             return DUO_NEUTRAL_COLOR
         if team_id < 1:
             return DUO_NEUTRAL_COLOR
-        return DUO_TEAM_COLORS[(team_id - 1) % len(DUO_TEAM_COLORS)]
+        source = self
+        if getattr(self, "is_host", False) and getattr(self, "server", None):
+            source = self.server
+        elif getattr(self, "is_client", False) and getattr(self, "client", None):
+            source = self.client
+        team_colors = getattr(source, "team_colors", {})
+        return (
+            team_colors.get(team_id)
+            or team_colors.get(str(team_id))
+            or DUO_TEAM_COLORS[(team_id - 1) % len(DUO_TEAM_COLORS)]
+        )
 
     def display_player_color(self, p_id, player=None):
         player = player if player is not None else getattr(self, "players", {}).get(p_id, {})
@@ -714,14 +740,15 @@ class GridGameApp:
         if self.current_game_mode() != GAME_MODE_DUO or not getattr(self, "team_status_labels", None):
             return
 
-        neutral_names = [
-            (
-                f"{player.get('name', f'Player {p_id}')} (P{p_id})"
-                + (" - YOU" if self.is_client and p_id == self.my_player_id else "")
+        neutral_names = []
+        for p_id, player in sorted(current_players.items()):
+            if player.get("team") is not None:
+                continue
+            suffix = " - YOU" if self.is_client and p_id == self.my_player_id else ""
+            ready_text = "READY" if player.get("ready", False) else "NOT READY"
+            neutral_names.append(
+                f"{player.get('name', f'Player {p_id}')} (P{p_id}){suffix} - {ready_text}"
             )
-            for p_id, player in sorted(current_players.items())
-            if player.get("team") is None
-        ]
         neutral_text = "\n".join(neutral_names) if neutral_names else "No neutral players"
         if 0 in self.team_status_labels:
             self.team_status_labels[0].config(text=neutral_text)
@@ -733,6 +760,9 @@ class GridGameApp:
             my_role = current_players[self.my_player_id].get("role")
 
         for team_id in range(1, self.duo_team_count() + 1):
+            team_color = self.duo_team_color(team_id)
+            if team_id in getattr(self, "team_title_labels", {}):
+                self.team_title_labels[team_id].config(fg=team_color)
             members = [
                 (p_id, player) for p_id, player in sorted(current_players.items())
                 if player.get("team") == team_id
@@ -743,14 +773,21 @@ class GridGameApp:
                 if player.get("role") in (ROLE_DECRYPT, ROLE_POWERUPS)
             }
             for role in (ROLE_DECRYPT, ROLE_POWERUPS):
+                if (team_id, role) in getattr(self, "team_role_title_labels", {}):
+                    self.team_role_title_labels[(team_id, role)].config(fg=team_color)
                 occupant = occupants.get(role)
                 if (team_id, role) in self.team_status_labels:
                     if occupant:
                         p_id, player = occupant
                         suffix = " - YOU" if self.is_client and p_id == self.my_player_id else ""
+                        ready_text = "READY" if player.get("ready", False) else "NOT READY"
+                        ready_color = "#55ff55" if player.get("ready", False) else "#ff7474"
                         self.team_status_labels[(team_id, role)].config(
-                            text=f"{player.get('name', f'Player {p_id}')} (P{p_id}){suffix}",
-                            fg="#ffffff",
+                            text=(
+                                f"{player.get('name', f'Player {p_id}')} (P{p_id}){suffix}"
+                                f"\n{ready_text}"
+                            ),
+                            fg=ready_color,
                         )
                     else:
                         self.team_status_labels[(team_id, role)].config(
@@ -763,8 +800,9 @@ class GridGameApp:
                     self.team_join_buttons[(team_id, role)].config(
                         state="disabled" if taken_by_other else "normal",
                         text="JOINED" if selected else ("TAKEN" if taken_by_other else "SELECT"),
-                        bg=self.duo_team_color(team_id) if selected else "#313143",
+                        bg=team_color if selected else "#313143",
                         fg="#121214" if selected else "#ffffff",
+                        activebackground=team_color,
                     )
         if 0 in self.team_join_buttons:
             is_neutral = my_team is None
@@ -885,8 +923,15 @@ class GridGameApp:
                 role_suffix = f" - {team_text} / {self.role_label(mine)}"
                 if hasattr(self, "lbl_status_desc"):
                     self.lbl_status_desc.config(text="Pick a duo team, then ready up.")
+                if hasattr(self, "btn_profile"):
+                    if mine.get("role") == ROLE_DECRYPT and mine.get("team") is not None:
+                        self.btn_profile.config(text="EDIT TEAM COLOR")
+                    else:
+                        self.btn_profile.config(text="EDIT PROFILE")
             elif hasattr(self, "lbl_status_desc"):
                 self.lbl_status_desc.config(text="Toggle ready status to let the Host start...")
+                if hasattr(self, "btn_profile"):
+                    self.btn_profile.config(text="EDIT PROFILE")
             self.lbl_lobby_title.config(
                 text=f"MULTIPLAYER LOBBY - {mine.get('name', f'Player {self.my_player_id}')} (P{self.my_player_id}){role_suffix}",
                 fg=self.display_player_color(self.my_player_id, mine)
@@ -1427,20 +1472,52 @@ class GridGameApp:
                     and self.my_player_id not in self.client.finished_players)):
             return
         player = self.players.get(self.my_player_id, {})
-        unavailable_colors = {
-            info.get("profile_color", info.get("color", "")).lower()
-            for player_id, info in self.players.items()
-            if player_id != self.my_player_id and info.get("profile_color", info.get("color"))
-        }
+        mode = self.current_game_mode()
+        is_duo_decryptor = (
+            mode == GAME_MODE_DUO
+            and player.get("role") == ROLE_DECRYPT
+            and player.get("team") is not None
+        )
+        allow_color = mode == GAME_MODE_SOLO or is_duo_decryptor
+        if is_duo_decryptor:
+            team_id = player.get("team")
+            profile_color = self.duo_team_color(team_id)
+            unavailable_colors = {
+                self.duo_team_color(other_team).lower()
+                for other_team in range(1, self.duo_team_count() + 1)
+                if other_team != team_id
+            }
+            title = "DUO TEAM PROFILE"
+            color_label = "TEAM COLOR"
+            save_label = "SAVE TEAM"
+        else:
+            profile_color = player.get(
+                "profile_color",
+                player.get("color", COLORS[(self.my_player_id - 1) % len(COLORS)])
+            )
+            unavailable_colors = {
+                info.get("profile_color", info.get("color", "")).lower()
+                for player_id, info in self.players.items()
+                if player_id != self.my_player_id and info.get("profile_color", info.get("color"))
+            } if allow_color else set()
+            title = "PLAYER PROFILE"
+            color_label = "PLAYER COLOR"
+            save_label = "SAVE PROFILE"
         result = PlayerProfileDialog(
             self.root, self.button_font,
             player.get("name", f"Player {self.my_player_id}"),
-            player.get("profile_color", player.get("color", COLORS[(self.my_player_id - 1) % len(COLORS)])),
+            profile_color,
             COLORS,
             unavailable_colors=unavailable_colors,
+            title=title,
+            color_label=color_label,
+            save_label=save_label,
+            allow_color=allow_color,
         ).show()
         if result:
-            self.preferred_name, self.preferred_color = result
+            self.preferred_name = result[0]
+            if not is_duo_decryptor:
+                self.preferred_color = result[1]
             self.profile_customized = True
             self.client.send_profile(*result)
 
@@ -1460,6 +1537,7 @@ class GridGameApp:
             self.difficulty = getattr(self.client, "difficulty", getattr(self, "difficulty", "easy"))
             self.items_per_player = getattr(self.client, "items_per_player", getattr(self, "items_per_player", 3))
             self.game_mode = getattr(self.client, "game_mode", getattr(self, "game_mode", GAME_MODE_SOLO))
+            self.team_colors = getattr(self.client, "team_colors", {})
             countdown = getattr(self.client, "countdown", 0)
             if countdown > 0 and not self.game_started:
                 self.countdown_active = True

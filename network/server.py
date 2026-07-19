@@ -101,6 +101,7 @@ class GridServer:
         self.difficulty            = "easy"
         self.items_per_player      = 3
         self.game_mode             = GAME_MODE_SOLO
+        self.team_colors           = {}
         self.cell_close_timer_active = False
         self.discovery = LobbyDiscoveryResponder(self._discovery_state)
 
@@ -371,6 +372,7 @@ class GridServer:
             return False
         if self.game_mode != mode:
             self.game_mode = mode
+            self.team_colors.clear()
             for player in self.players.values():
                 player["ready"] = False
                 player["team"] = None
@@ -450,7 +452,16 @@ class GridServer:
             return DUO_NEUTRAL_COLOR
         if team_id < 1:
             return DUO_NEUTRAL_COLOR
-        return DUO_TEAM_COLORS[(team_id - 1) % len(DUO_TEAM_COLORS)]
+        return self.team_colors.get(team_id, DUO_TEAM_COLORS[(team_id - 1) % len(DUO_TEAM_COLORS)])
+
+    def team_color_is_available(self, team_id, color):
+        clean_color = str(color).strip().lower()
+        for other_team in range(1, self.duo_team_count() + 1):
+            if other_team == team_id:
+                continue
+            if self.duo_team_color(other_team).lower() == clean_color:
+                return False
+        return True
 
     def display_player_color(self, p_id):
         player = self.players.get(p_id, {})
@@ -535,10 +546,13 @@ class GridServer:
             except Exception:
                 break
 
+        server_is_stopping = not self.server_running
         try:
             conn.close()
         except Exception:
             pass
+        if server_is_stopping:
+            return
         leaving_name = self.players.get(p_id, {}).get("name", f"Player {p_id}")
         self.host_discovered_items.difference_update(self.player_items.get(p_id, set()))
         for d in (self.clients, self.players,
@@ -580,11 +594,34 @@ class GridServer:
         if not re.fullmatch(r"#[0-9a-f]{6}", clean_color):
             self._send_to(p_id, {
                 "type": "profile_result", "success": False,
-                "reason": "Choose a valid player color.",
+                "reason": "Choose a valid color.",
             })
             return
+        is_duo_decryptor = (
+            self.game_mode == GAME_MODE_DUO
+            and self.players[p_id].get("role") == ROLE_DECRYPT
+            and self.players[p_id].get("team") is not None
+        )
         with self._color_lock:
-            if any(
+            old_name = self.players[p_id].get("name", f"Player {p_id}")
+            team_id = self.players[p_id].get("team")
+
+            if is_duo_decryptor:
+                try:
+                    team_id = int(team_id)
+                except (TypeError, ValueError):
+                    self._send_to(p_id, {
+                        "type": "profile_result", "success": False,
+                        "reason": "Join a duo team before changing team color.",
+                    })
+                    return
+                if not self.team_color_is_available(team_id, clean_color):
+                    self._send_to(p_id, {
+                        "type": "profile_result", "success": False,
+                        "reason": "That team color is already used by another team.",
+                    })
+                    return
+            elif any(
                 other_id != p_id and player.get("color", "").lower() == clean_color
                 for other_id, player in self.players.items()
             ):
@@ -594,9 +631,11 @@ class GridServer:
                 })
                 return
 
-            old_name = self.players[p_id].get("name", f"Player {p_id}")
             self.players[p_id]["name"] = clean_name
-            self.players[p_id]["color"] = clean_color
+            if is_duo_decryptor:
+                self.team_colors[team_id] = clean_color
+            else:
+                self.players[p_id]["color"] = clean_color
         self._send_to(p_id, {"type": "profile_result", "success": True})
         if self.game_started:
             if self.on_game_update:
@@ -912,6 +951,10 @@ class GridServer:
             "difficulty": self.difficulty,
             "items_per_player": self.items_per_player,
             "game_mode": self.game_mode,
+            "team_colors": {
+                str(team_id): self.duo_team_color(team_id)
+                for team_id in range(1, self.duo_team_count() + 1)
+            },
             "countdown": self.countdown,
             "chat_history": list(self.chat_history),
         }
@@ -1044,21 +1087,31 @@ class GridServer:
         self.countdown = 0
         self.spawner_active = False
         self.discovery.stop()
+        shutdown_msg = json.dumps({"type": "server_shutdown"}) + "\n"
+        for conn in list(self.clients.values()):
+            try:
+                conn.sendall(shutdown_msg.encode())
+            except Exception:
+                pass
+            try:
+                conn.shutdown(socket.SHUT_RDWR)
+            except Exception:
+                pass
+            try:
+                conn.close()
+            except Exception:
+                pass
         if self.server_socket:
             try:
                 self.server_socket.close()
             except Exception:
                 pass
             self.server_socket = None
-        for conn in list(self.clients.values()):
-            try:
-                conn.close()
-            except Exception:
-                pass
         self.clients.clear()
         self.players.clear()
         self.player_visited.clear()
         self.player_items.clear()
         self.player_collected.clear()
         self.host_discovered_items.clear()
+        self.team_colors.clear()
         self.chat_history.clear()

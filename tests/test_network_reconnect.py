@@ -60,6 +60,22 @@ class NetworkReconnectTest(unittest.TestCase):
             snapshots,
         )
 
+    def test_client_is_notified_when_server_stops_in_lobby(self):
+        disconnects = []
+        client = GridClient(
+            "127.0.0.1",
+            port=self.port,
+            on_disconnect=lambda: disconnects.append("disconnect"),
+        )
+        self.addCleanup(client.stop)
+        self.assertTrue(client.connect())
+        self.assertTrue(self.wait_for(lambda: client.my_player_id == 1))
+
+        self.server.stop()
+
+        self.assertTrue(self.wait_for(lambda: disconnects == ["disconnect"]), disconnects)
+        self.assertFalse(client.client_running)
+
     def test_lobby_chat_reports_join_message_and_leave(self):
         client = GridClient("127.0.0.1", port=self.port)
         self.assertTrue(client.connect())

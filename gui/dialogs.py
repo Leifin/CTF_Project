@@ -7,7 +7,9 @@ from network.discovery import discover_games
 
 class PlayerProfileDialog:
     def __init__(self, parent, button_font, name, color, preset_colors,
-                 unavailable_colors=None):
+                 unavailable_colors=None, title="PLAYER PROFILE",
+                 color_label="PLAYER COLOR", save_label="SAVE PROFILE",
+                 allow_color=True):
         self.parent = parent
         self.button_font = button_font
         self.name = name
@@ -16,6 +18,10 @@ class PlayerProfileDialog:
         self.unavailable_colors = {
             str(value).lower() for value in (unavailable_colors or [])
         }
+        self.title = title
+        self.color_label = color_label
+        self.save_label = save_label
+        self.allow_color = allow_color
 
     def show(self):
         result = {"value": None}
@@ -32,7 +38,7 @@ class PlayerProfileDialog:
         dialog.transient(self.parent)
         dialog.grab_set()
 
-        tk.Label(dialog, text="PLAYER PROFILE", fg="#00d2ff", bg="#121214",
+        tk.Label(dialog, text=self.title, fg="#00d2ff", bg="#121214",
                  font=font.Font(family="Segoe UI", size=16, weight="bold")).pack(pady=(22, 16))
         tk.Label(dialog, text="DISPLAY NAME", fg="#8c8c9a", bg="#121214",
                  font=font.Font(family="Segoe UI", size=9, weight="bold")).pack()
@@ -43,14 +49,10 @@ class PlayerProfileDialog:
         entry.insert(0, self.name)
         entry.select_range(0, tk.END)
 
-        tk.Label(dialog, text="PLAYER COLOR", fg="#8c8c9a", bg="#121214",
-                 font=font.Font(family="Segoe UI", size=9, weight="bold")).pack()
         color_error = tk.Label(
             dialog, text="", fg="#ff4d4d", bg="#121214",
             font=font.Font(family="Segoe UI", size=9),
         )
-        swatches = tk.Frame(dialog, bg="#121214")
-        swatches.pack(pady=10)
         preview = tk.Label(dialog, text=selected_color.get().upper(), fg="#121214",
                            bg=selected_color.get(), width=18, pady=5,
                            font=font.Font(family="Segoe UI", size=9, weight="bold"))
@@ -58,39 +60,45 @@ class PlayerProfileDialog:
         def choose(value):
             normalized = value.lower()
             if normalized in self.unavailable_colors:
-                color_error.config(text="That color is already used by another player.")
+                color_error.config(text="That color is already used.")
                 return
             color_error.config(text="")
             selected_color.set(normalized)
             preview.config(text=value.upper(), bg=value)
 
-        for value in self.preset_colors:
-            unavailable = value.lower() in self.unavailable_colors
-            tk.Button(
-                swatches, bg=value, activebackground=value, disabledforeground="#555555",
-                bd=0, width=4, height=2, cursor="arrow" if unavailable else "hand2",
-                state="disabled" if unavailable else "normal",
-                command=lambda v=value: choose(v),
-            ).pack(side="left", padx=5)
+        if self.allow_color:
+            tk.Label(dialog, text=self.color_label, fg="#8c8c9a", bg="#121214",
+                     font=font.Font(family="Segoe UI", size=9, weight="bold")).pack()
+            swatches = tk.Frame(dialog, bg="#121214")
+            swatches.pack(pady=10)
 
-        def choose_custom():
-            picked = colorchooser.askcolor(color=selected_color.get(), parent=dialog)[1]
-            if picked:
-                choose(picked)
+            for value in self.preset_colors:
+                unavailable = value.lower() in self.unavailable_colors
+                tk.Button(
+                    swatches, bg=value, activebackground=value, disabledforeground="#555555",
+                    bd=0, width=4, height=2, cursor="arrow" if unavailable else "hand2",
+                    state="disabled" if unavailable else "normal",
+                    command=lambda v=value: choose(v),
+                ).pack(side="left", padx=5)
 
-        tk.Button(swatches, text="+", command=choose_custom, bg="#313143", fg="#ffffff",
-                  activebackground="#42425b", activeforeground="#ffffff", bd=0,
-                  width=4, height=2, cursor="hand2", font=self.button_font).pack(side="left", padx=5)
-        preview.pack(pady=(0, 15))
-        color_error.pack()
+            def choose_custom():
+                picked = colorchooser.askcolor(color=selected_color.get(), parent=dialog)[1]
+                if picked:
+                    choose(picked)
+
+            tk.Button(swatches, text="+", command=choose_custom, bg="#313143", fg="#ffffff",
+                      activebackground="#42425b", activeforeground="#ffffff", bd=0,
+                      width=4, height=2, cursor="hand2", font=self.button_font).pack(side="left", padx=5)
+            preview.pack(pady=(0, 15))
+            color_error.pack()
 
         def close():
             dialog.destroy()
 
         def save():
             name = " ".join(entry.get().split())[:16]
-            if selected_color.get().lower() in self.unavailable_colors:
-                color_error.config(text="That color is already used by another player.")
+            if self.allow_color and selected_color.get().lower() in self.unavailable_colors:
+                color_error.config(text="That color is already used.")
             elif name:
                 result["value"] = (name, selected_color.get())
                 dialog.destroy()
@@ -100,7 +108,7 @@ class PlayerProfileDialog:
         tk.Button(buttons, text="CANCEL", command=close, bg="#212128", fg="#8c8c9a",
                   activebackground="#ff4d4d", activeforeground="#ffffff", bd=0,
                   width=15, pady=8, cursor="hand2", font=self.button_font).pack(side="left")
-        tk.Button(buttons, text="SAVE PROFILE", command=save, bg="#00d2ff", fg="#121214",
+        tk.Button(buttons, text=self.save_label, command=save, bg="#00d2ff", fg="#121214",
                   activebackground="#00a3cc", activeforeground="#121214", bd=0,
                   width=15, pady=8, cursor="hand2", font=self.button_font).pack(side="right")
 

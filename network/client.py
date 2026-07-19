@@ -18,6 +18,7 @@ class GridClient:
 
         self.client_socket = None
         self.client_running = False
+        self._disconnect_reported = False
         self.my_player_id = None
         self.game_started = False
         self.countdown = 0
@@ -34,6 +35,7 @@ class GridClient:
         self.difficulty       = "easy"
         self.items_per_player = 3
         self.game_mode        = "solo"
+        self.team_colors      = {}
 
     # ------------------------------------------------------------------
     def get_my_visited(self):
@@ -58,6 +60,7 @@ class GridClient:
         try:
             self.client_socket.connect((self.host_ip, self.port))
             self.client_running = True
+            self._disconnect_reported = False
             threading.Thread(target=self._receive_messages, daemon=True).start()
             return True
         except Exception as e:
@@ -84,6 +87,10 @@ class GridClient:
                         break
 
                     msg = json.loads(line)
+                    if msg.get("type") == "server_shutdown":
+                        self._notify_disconnect()
+                        return
+
                     if msg.get("type") == "init":
                         self.my_player_id = msg["id"]
                         self.max_players = msg.get("max_players", 6)
@@ -138,6 +145,10 @@ class GridClient:
                         self.difficulty        = msg.get("difficulty", "easy")
                         self.items_per_player  = msg.get("items_per_player", 3)
                         self.game_mode         = msg.get("game_mode", "solo")
+                        self.team_colors       = {
+                            int(team_id): color
+                            for team_id, color in msg.get("team_colors", {}).items()
+                        }
 
                         if self.on_state_update:
                             self.on_state_update()
@@ -155,9 +166,15 @@ class GridClient:
                 break
 
         if self.client_running:
-            self.client_running = False
-            if self.on_disconnect:
-                self.on_disconnect()
+            self._notify_disconnect()
+
+    def _notify_disconnect(self):
+        if self._disconnect_reported:
+            return
+        self._disconnect_reported = True
+        self.client_running = False
+        if self.on_disconnect:
+            self.on_disconnect()
 
     def send_move(self, dr, dc):
         if not self.client_running:
@@ -228,7 +245,12 @@ class GridClient:
 
     def stop(self):
         self.client_running = False
+        self._disconnect_reported = True
         if self.client_socket:
+            try:
+                self.client_socket.shutdown(socket.SHUT_RDWR)
+            except Exception:
+                pass
             try:
                 self.client_socket.close()
             except Exception:
@@ -239,3 +261,4 @@ class GridClient:
         self.finish_times.clear()
         self.move_item_targets.clear()
         self.chat_history.clear()
+        self.team_colors.clear()

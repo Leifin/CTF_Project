@@ -237,6 +237,64 @@ class MultiplayerRulesTest(unittest.TestCase):
         server.process_client_chat(1, "team color")
         self.assertEqual(server.chat_history[-1]["color"], DUO_TEAM_COLORS[0])
 
+    def test_duo_decryptor_can_change_team_color(self):
+        server = self.make_server()
+        sent = []
+        server._send_to = lambda p_id, msg: sent.append((p_id, msg))
+        server.game_mode = GAME_MODE_DUO
+        server.game_started = False
+        server.players[1]["team"] = 1
+        server.players[1]["role"] = ROLE_DECRYPT
+        server.players[2]["team"] = 1
+        server.players[2]["role"] = ROLE_POWERUPS
+
+        server.process_client_profile(1, "Alice", "#123456")
+
+        self.assertTrue(sent[-1][1]["success"])
+        self.assertEqual(server.team_colors[1], "#123456")
+        self.assertEqual(server.players[1]["color"], "#00d2ff")
+        state = server._build_state(1)
+        self.assertEqual(state["team_colors"]["1"], "#123456")
+        self.assertEqual(state["players"]["1"]["color"], "#123456")
+        self.assertEqual(state["players"]["2"]["color"], "#123456")
+        server.process_client_chat(2, "team color")
+        self.assertEqual(server.chat_history[-1]["color"], "#123456")
+
+    def test_duo_powerups_role_cannot_change_team_color(self):
+        server = self.make_server()
+        sent = []
+        server._send_to = lambda p_id, msg: sent.append((p_id, msg))
+        server.game_mode = GAME_MODE_DUO
+        server.game_started = False
+        server.players[1]["team"] = 1
+        server.players[1]["role"] = ROLE_DECRYPT
+        server.players[2]["team"] = 1
+        server.players[2]["role"] = ROLE_POWERUPS
+
+        server.process_client_profile(2, "Battery", "#123456")
+
+        self.assertTrue(sent[-1][1]["success"])
+        self.assertNotIn(1, server.team_colors)
+        self.assertEqual(server.duo_team_color(1), DUO_TEAM_COLORS[0])
+        self.assertEqual(server.players[2]["color"], "#123456")
+
+    def test_duo_team_color_must_be_unique(self):
+        server = self.make_server()
+        sent = []
+        server._send_to = lambda p_id, msg: sent.append((p_id, msg))
+        server.max_players = 4
+        server.game_mode = GAME_MODE_DUO
+        server.game_started = False
+        server.players[1]["team"] = 1
+        server.players[1]["role"] = ROLE_DECRYPT
+        server.team_colors[2] = "#123456"
+
+        server.process_client_profile(1, "Alice", "#123456")
+
+        self.assertFalse(sent[-1][1]["success"])
+        self.assertIn("team color", sent[-1][1]["reason"])
+        self.assertNotIn(1, server.team_colors)
+
     @patch("network.server.play_sound", lambda *_: None)
     def test_duo_roles_restrict_decrypt_and_powerup_actions(self):
         server = self.make_server()
