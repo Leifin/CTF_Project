@@ -208,6 +208,21 @@ class MultiplayerRulesTest(unittest.TestCase):
 
         self.assertTrue(server.can_start_game())
 
+    def test_duo_players_pick_specific_role_boxes(self):
+        server = self.make_server()
+        server.game_started = False
+        server.set_game_mode(GAME_MODE_DUO)
+
+        self.assertTrue(server.process_client_team(1, 1, ROLE_POWERUPS))
+        self.assertEqual(server.players[1]["role"], ROLE_POWERUPS)
+        self.assertFalse(server.process_client_team(2, 1, ROLE_POWERUPS))
+        self.assertTrue(server.process_client_team(2, 1, ROLE_DECRYPT))
+        self.assertEqual(server.players[2]["role"], ROLE_DECRYPT)
+
+        server.players[1]["ready"] = True
+        server.players[2]["ready"] = True
+        self.assertTrue(server.can_start_game())
+
     def test_duo_mode_uses_team_color_instead_of_personal_color(self):
         server = self.make_server()
         server.game_mode = GAME_MODE_DUO

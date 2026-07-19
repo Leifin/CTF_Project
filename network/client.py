@@ -186,10 +186,12 @@ class GridClient:
         except Exception:
             pass
 
-    def send_team(self, team_id):
+    def send_team(self, team_id, role=None):
         if not self.client_running:
             return
         team_msg = {"action": "team", "team": team_id}
+        if role is not None:
+            team_msg["role"] = str(role)
         try:
             self.client_socket.sendall((json.dumps(team_msg) + "\n").encode())
         except Exception:

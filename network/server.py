@@ -25,6 +25,7 @@ ROLE_SOLO = "solo"
 ROLE_NEUTRAL = "neutral"
 ROLE_DECRYPT = "decrypt"
 ROLE_POWERUPS = "powerups"
+DUO_ROLES = (ROLE_DECRYPT, ROLE_POWERUPS)
 DUO_TEAM_COLORS = ("#00d2ff", "#ff4d4d", "#ffd24d")
 DUO_NEUTRAL_COLOR = "#8c8c9a"
 
@@ -313,6 +314,20 @@ class GridServer:
             if player.get("team") == team_id
         )
 
+    def _duo_role_holder(self, team_id, role, exclude_id=None):
+        for p_id, player in self.players.items():
+            if p_id == exclude_id:
+                continue
+            if player.get("team") == team_id and player.get("role") == role:
+                return p_id
+        return None
+
+    def first_open_duo_role(self, team_id, exclude_id=None):
+        for role in DUO_ROLES:
+            if self._duo_role_holder(team_id, role, exclude_id=exclude_id) is None:
+                return role
+        return None
+
     def assign_duo_roles(self):
         if self.game_mode == GAME_MODE_SOLO:
             for player in self.players.values():
@@ -320,12 +335,34 @@ class GridServer:
                 player["role"] = ROLE_SOLO
             return
 
-        for player in self.players.values():
-            player["role"] = ROLE_NEUTRAL
-        for team_id in range(1, self.duo_team_count() + 1):
-            members = self._duo_team_members(team_id)
-            for index, p_id in enumerate(members[:2]):
-                self.players[p_id]["role"] = ROLE_DECRYPT if index == 0 else ROLE_POWERUPS
+        used_slots = set()
+        for p_id in sorted(self.players):
+            player = self.players[p_id]
+            team_id = player.get("team")
+            if team_id is None:
+                player["role"] = ROLE_NEUTRAL
+                continue
+            try:
+                team_id = int(team_id)
+            except (TypeError, ValueError):
+                player["team"] = None
+                player["role"] = ROLE_NEUTRAL
+                continue
+            if not (1 <= team_id <= self.duo_team_count()):
+                player["team"] = None
+                player["role"] = ROLE_NEUTRAL
+                continue
+            role = player.get("role")
+            if role not in DUO_ROLES or (team_id, role) in used_slots:
+                role = next(
+                    (candidate for candidate in DUO_ROLES
+                     if (team_id, candidate) not in used_slots),
+                    ROLE_NEUTRAL,
+                )
+            player["team"] = team_id
+            player["role"] = role
+            if role in DUO_ROLES:
+                used_slots.add((team_id, role))
 
     def set_game_mode(self, mode):
         if self.game_started or self.countdown_active:
@@ -343,7 +380,7 @@ class GridServer:
                 self.on_lobby_update()
         return True
 
-    def process_client_team(self, p_id, team_id):
+    def process_client_team(self, p_id, team_id, role=None):
         if (p_id not in self.players or self.game_started or self.countdown_active
                 or self.game_mode != GAME_MODE_DUO):
             return False
@@ -354,13 +391,23 @@ class GridServer:
 
         if team_id is None or team_id == 0:
             self.players[p_id]["team"] = None
+            self.players[p_id]["role"] = ROLE_NEUTRAL
         elif not (1 <= team_id <= self.duo_team_count()):
             return False
         else:
-            members = self._duo_team_members(team_id)
-            if p_id not in members and len(members) >= 2:
+            desired_role = role if role in DUO_ROLES else None
+            if desired_role is None:
+                current_role = self.players[p_id].get("role")
+                if self.players[p_id].get("team") == team_id and current_role in DUO_ROLES:
+                    desired_role = current_role
+                else:
+                    desired_role = self.first_open_duo_role(team_id, exclude_id=p_id)
+            if desired_role is None:
+                return False
+            if self._duo_role_holder(team_id, desired_role, exclude_id=p_id) is not None:
                 return False
             self.players[p_id]["team"] = team_id
+            self.players[p_id]["role"] = desired_role
 
         self.players[p_id]["ready"] = False
         self.assign_duo_roles()
@@ -428,7 +475,11 @@ class GridServer:
         if len(assigned_players) != len(self.players) or len(self.players) % 2:
             return False
         for team_id in {self.players[p_id].get("team") for p_id in assigned_players}:
-            if len(self._duo_team_members(team_id)) != 2:
+            members = self._duo_team_members(team_id)
+            if len(members) != 2:
+                return False
+            roles = {self.players[p_id].get("role") for p_id in members}
+            if roles != set(DUO_ROLES):
                 return False
         return True
 
@@ -480,7 +531,7 @@ class GridServer:
                     elif msg.get("action") == "chat":
                         self.process_client_chat(p_id, msg.get("text", ""))
                     elif msg.get("action") == "team":
-                        self.process_client_team(p_id, msg.get("team"))
+                        self.process_client_team(p_id, msg.get("team"), msg.get("role"))
             except Exception:
                 break
 

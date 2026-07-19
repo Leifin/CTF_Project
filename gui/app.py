@@ -394,12 +394,12 @@ class GridGameApp:
     def duo_team_count(self):
         return max(1, (getattr(self, "max_players", 6) + 1) // 2)
 
-    def join_duo_team(self, team_id):
+    def join_duo_team(self, team_id, role=None):
         if self.is_client and self.client:
             self.client_is_ready = False
             if hasattr(self, "btn_ready"):
                 self.btn_ready.config(text="READY", bg="#55ff55", fg="#121214")
-            self.client.send_team(team_id)
+            self.client.send_team(team_id, role)
 
     def build_lobby_slots_ui(self):
         if hasattr(self, 'lobby_body_frame') and self.lobby_body_frame:
@@ -485,27 +485,51 @@ class GridGameApp:
 
         for team_id in range(1, self.duo_team_count() + 1):
             color = self.duo_team_color(team_id)
-            card = tk.Frame(row, bg="#1a1a24", bd=1, relief="solid", width=220, height=104)
+            card = tk.Frame(row, bg="#1a1a24", bd=1, relief="solid", width=236, height=128)
             card.pack(side="left", padx=4)
             card.pack_propagate(False)
             tk.Label(card, text=f"TEAM {team_id}", fg=color, bg="#1a1a24",
                      font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=10, pady=(8, 2))
-            self.team_status_labels[team_id] = tk.Label(
-                card, text="Decrypt: open\nPowerups: open",
-                fg="#d7d7df", bg="#1a1a24", font=("Segoe UI", 8),
-                justify="left"
-            )
-            self.team_status_labels[team_id].pack(anchor="w", padx=10)
-            if self.is_client:
-                btn = tk.Button(
-                    card, text="JOIN", command=lambda team=team_id: self.join_duo_team(team),
-                    bg="#313143", fg="#ffffff", activebackground=color,
-                    activeforeground="#121214", bd=0, font=("Segoe UI", 8, "bold"),
-                    cursor="hand2"
+
+            role_row = tk.Frame(card, bg="#1a1a24")
+            role_row.pack(fill="both", expand=True, padx=8, pady=(2, 8))
+            for role, label_text in ((ROLE_DECRYPT, "DECRYPT"), (ROLE_POWERUPS, "POWERUPS")):
+                role_box = tk.Frame(
+                    role_row, bg="#212128", bd=1, relief="solid",
+                    highlightthickness=1, highlightbackground="#313143",
+                    width=104, height=78,
                 )
-                btn.pack(anchor="e", padx=10, pady=(4, 0))
-                card.bind("<Button-1>", lambda e, team=team_id: self.join_duo_team(team))
-                self.team_join_buttons[team_id] = btn
+                role_box.pack(side="left", fill="both", expand=True, padx=3)
+                role_box.pack_propagate(False)
+
+                title = tk.Label(
+                    role_box, text=label_text, fg=color, bg="#212128",
+                    font=("Segoe UI", 8, "bold")
+                )
+                title.pack(anchor="w", padx=8, pady=(6, 1))
+                occupant = tk.Label(
+                    role_box, text="open", fg="#d7d7df", bg="#212128",
+                    font=("Segoe UI", 8), anchor="w", justify="left",
+                    wraplength=84,
+                )
+                occupant.pack(anchor="w", padx=8)
+                self.team_status_labels[(team_id, role)] = occupant
+
+                if self.is_client:
+                    btn = tk.Button(
+                        role_box, text="SELECT",
+                        command=lambda team=team_id, selected_role=role: self.join_duo_team(team, selected_role),
+                        bg="#313143", fg="#ffffff", activebackground=color,
+                        activeforeground="#121214", bd=0, font=("Segoe UI", 7, "bold"),
+                        cursor="hand2",
+                    )
+                    btn.pack(anchor="e", padx=7, pady=(3, 0))
+                    for widget in (role_box, title, occupant):
+                        widget.bind(
+                            "<Button-1>",
+                            lambda e, team=team_id, selected_role=role: self.join_duo_team(team, selected_role)
+                        )
+                    self.team_join_buttons[(team_id, role)] = btn
 
         neutral_panel = tk.Frame(
             self.lobby_container, bg="#1a1a24", bd=1, relief="solid",
@@ -703,32 +727,45 @@ class GridGameApp:
             self.team_status_labels[0].config(text=neutral_text)
 
         my_team = None
+        my_role = None
         if self.is_client and self.my_player_id in current_players:
             my_team = current_players[self.my_player_id].get("team")
+            my_role = current_players[self.my_player_id].get("role")
 
         for team_id in range(1, self.duo_team_count() + 1):
             members = [
                 (p_id, player) for p_id, player in sorted(current_players.items())
                 if player.get("team") == team_id
             ]
-            decrypt_name = "open"
-            powerup_name = "open"
-            if members:
-                decrypt_name = members[0][1].get("name", f"Player {members[0][0]}")
-            if len(members) > 1:
-                powerup_name = members[1][1].get("name", f"Player {members[1][0]}")
-            if team_id in self.team_status_labels:
-                self.team_status_labels[team_id].config(
-                    text=f"Decrypt: {decrypt_name}\nPowerups: {powerup_name}"
-                )
-            if team_id in self.team_join_buttons:
-                full = len(members) >= 2 and my_team != team_id
-                self.team_join_buttons[team_id].config(
-                    state="disabled" if full else "normal",
-                    text="JOINED" if my_team == team_id else "JOIN",
-                    bg="#00d2ff" if my_team == team_id else "#313143",
-                    fg="#121214" if my_team == team_id else "#ffffff",
-                )
+            occupants = {
+                player.get("role"): (p_id, player)
+                for p_id, player in members
+                if player.get("role") in (ROLE_DECRYPT, ROLE_POWERUPS)
+            }
+            for role in (ROLE_DECRYPT, ROLE_POWERUPS):
+                occupant = occupants.get(role)
+                if (team_id, role) in self.team_status_labels:
+                    if occupant:
+                        p_id, player = occupant
+                        suffix = " - YOU" if self.is_client and p_id == self.my_player_id else ""
+                        self.team_status_labels[(team_id, role)].config(
+                            text=f"{player.get('name', f'Player {p_id}')} (P{p_id}){suffix}",
+                            fg="#ffffff",
+                        )
+                    else:
+                        self.team_status_labels[(team_id, role)].config(
+                            text="open",
+                            fg="#d7d7df",
+                        )
+                if (team_id, role) in self.team_join_buttons:
+                    selected = my_team == team_id and my_role == role
+                    taken_by_other = occupant is not None and not selected
+                    self.team_join_buttons[(team_id, role)].config(
+                        state="disabled" if taken_by_other else "normal",
+                        text="JOINED" if selected else ("TAKEN" if taken_by_other else "SELECT"),
+                        bg=self.duo_team_color(team_id) if selected else "#313143",
+                        fg="#121214" if selected else "#ffffff",
+                    )
         if 0 in self.team_join_buttons:
             is_neutral = my_team is None
             self.team_join_buttons[0].config(
@@ -751,7 +788,10 @@ class GridGameApp:
         if len(assigned) != len(current_players):
             return False
         for team_id in {info.get("team") for info in assigned}:
-            if sum(1 for info in assigned if info.get("team") == team_id) != 2:
+            team_members = [info for info in assigned if info.get("team") == team_id]
+            if len(team_members) != 2:
+                return False
+            if {info.get("role") for info in team_members} != {ROLE_DECRYPT, ROLE_POWERUPS}:
                 return False
         return True
 
@@ -815,8 +855,8 @@ class GridGameApp:
                 total_teams = self.duo_team_count()
                 complete_teams = sum(
                     1 for team_id in range(1, total_teams + 1)
-                    if sum(1 for info in current_players.values()
-                           if info.get("team") == team_id) == 2
+                    if {info.get("role") for info in current_players.values()
+                        if info.get("team") == team_id} == {ROLE_DECRYPT, ROLE_POWERUPS}
                 )
                 self.lbl_host_status.config(
                     text=f"HOST LOBBY ROOM [DUO] - TEAMS: {complete_teams}/{total_teams} | PLAYERS: {num_players}/{max_p}"
