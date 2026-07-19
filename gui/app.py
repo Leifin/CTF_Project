@@ -115,7 +115,6 @@ class GridGameApp:
         self.root.bind("<Return>", lambda e: self.open_vault_at_current_item())
         self.root.bind("<KP_Enter>", lambda e: self.open_vault_at_current_item())
         self.root.bind("<Escape>", lambda e: self.cancel_qte())
-        self.root.bind("<Key-slash>", self.toggle_ingame_chat)
 
     def clear_screen(self):
         self.hide_powerup_tooltip()
@@ -335,22 +334,6 @@ class GridGameApp:
         )
         self.btn_start.pack(side="right", padx=10, pady=12)
 
-        self.btn_demo_start = tk.Button(
-            self.header,
-            text="DEMO START",
-            command=self.start_host_active_game_screen,
-            bg="#ff9f1a",
-            fg="#121214",
-            activebackground="#e68a00",
-            activeforeground="#121214",
-            bd=0,
-            padx=20,
-            pady=5,
-            font=self.score_font,
-            cursor="hand2"
-        )
-        self.btn_demo_start.pack(side="right", padx=10, pady=12)
-
         self.sub_header = tk.Frame(self.current_frame, bg="#15151e", height=30)
         self.sub_header.pack(fill="x")
         
@@ -500,188 +483,12 @@ class GridGameApp:
             self.client.send_chat(text)
 
     def build_ingame_chat_ui(self):
-        """Create the transient notification stack and hidden chat panel."""
+        """Create the transient in-game chat notification stack."""
         self.ingame_chat_notifications = []
         self.ingame_chat_snapshot = list(self.current_chat_history())
 
         self.chat_notification_frame = tk.Frame(self.current_frame, bg="#121214")
         self.chat_notification_frame.place(relx=1.0, rely=1.0, x=-20, y=-20, anchor="se")
-
-        self.ingame_chat_panel = tk.Frame(
-            self.current_frame, bg="#1a1a24", bd=1, relief="solid",
-            width=390, height=320,
-        )
-        self.ingame_chat_panel.pack_propagate(False)
-        tk.Label(
-            self.ingame_chat_panel, text="TEAM CHAT", fg="#ffd24d", bg="#1a1a24",
-            font=("Segoe UI", 11, "bold"),
-        ).pack(anchor="w", padx=12, pady=(10, 4))
-        self.ingame_chat_text = tk.Text(
-            self.ingame_chat_panel, bg="#121214", fg="#ffffff", bd=0,
-            wrap="word", state="disabled", font=("Segoe UI", 9),
-        )
-        self.ingame_chat_text.pack(fill="both", expand=True, padx=12, pady=4)
-        self.ingame_chat_text.bind("<Button-1>", self.focus_ingame_chat_entry)
-        entry_row = tk.Frame(self.ingame_chat_panel, bg="#1a1a24")
-        entry_row.pack(fill="x", padx=12, pady=(4, 12))
-        self.ingame_chat_entry = tk.Entry(
-            entry_row, bg="#212128", fg="#ffffff", insertbackground="#ffffff",
-            bd=0, font=("Segoe UI", 10), state="normal", takefocus=True,
-            highlightthickness=1, highlightbackground="#3a3a4a",
-            highlightcolor="#00d2ff",
-        )
-        self.ingame_chat_entry.pack(side="left", fill="x", expand=True, ipady=7)
-        self.ingame_chat_entry.bind("<Return>", self.send_ingame_chat)
-        self.ingame_chat_entry.bind("<Escape>", self.close_ingame_chat)
-        self.ingame_chat_entry.bind("<Key-slash>", self.toggle_ingame_chat)
-        if not getattr(self, "_ingame_chat_key_router_bound", False):
-            self.root.bind_all("<Key>", self.route_ingame_chat_key, add="+")
-            self._ingame_chat_key_router_bound = True
-        tk.Button(
-            entry_row, text="SEND", command=self.send_ingame_chat,
-            bg="#00d2ff", fg="#121214", bd=0, padx=16, pady=7,
-            font=self.button_font, cursor="hand2",
-        ).pack(side="right", padx=(8, 0))
-        self.ingame_chat_panel.bind("<Button-1>", self.focus_ingame_chat_entry)
-        self.refresh_ingame_chat_text()
-
-    def ingame_chat_is_open(self):
-        if not hasattr(self, "ingame_chat_panel"):
-            return False
-        try:
-            if not self.ingame_chat_panel.winfo_exists():
-                return False
-            return bool(self.ingame_chat_panel.place_info())
-        except tk.TclError:
-            return False
-
-    def ingame_chat_entry_has_focus(self):
-        if not hasattr(self, "ingame_chat_entry"):
-            return False
-        try:
-            return self.root.focus_get() is self.ingame_chat_entry
-        except tk.TclError:
-            return False
-
-    def ingame_chat_should_capture_keys(self):
-        return (
-            getattr(self, "in_active_game", False)
-            and hasattr(self, "ingame_chat_entry")
-            and self.ingame_chat_is_open()
-        )
-
-    def toggle_ingame_chat(self, event=None):
-        if not self.in_active_game or not hasattr(self, "ingame_chat_panel"):
-            return "break"
-        if self.ingame_chat_is_open():
-            return self.close_ingame_chat(event)
-        return self.open_ingame_chat(event)
-
-    def open_ingame_chat(self, event=None):
-        if not self.in_active_game or not hasattr(self, "ingame_chat_panel"):
-            return "break"
-        if event is not None and self.ingame_chat_entry_has_focus():
-            return "break"
-        self.chat_notification_frame.place_forget()
-        self.ingame_chat_panel.place(relx=1.0, rely=1.0, x=-20, y=-20, anchor="se")
-        self.ingame_chat_panel.lift()
-        self.refresh_ingame_chat_text()
-        self.focus_ingame_chat_entry()
-        self.root.after_idle(self.focus_ingame_chat_entry)
-        return "break"
-
-    def focus_ingame_chat_entry(self, event=None):
-        """Keep keyboard input in the editable message field while chat is open."""
-        if not hasattr(self, "ingame_chat_entry"):
-            return "break"
-        try:
-            self.ingame_chat_entry.config(state="normal")
-            self.ingame_chat_entry.focus_set()
-            self.ingame_chat_entry.focus_force()
-            self.ingame_chat_entry.icursor(tk.END)
-        except tk.TclError:
-            pass
-        return "break"
-
-    def close_ingame_chat(self, event=None):
-        if hasattr(self, "ingame_chat_panel"):
-            self.ingame_chat_panel.place_forget()
-        if hasattr(self, "chat_notification_frame"):
-            self.chat_notification_frame.place(relx=1.0, rely=1.0, x=-20, y=-20, anchor="se")
-        if hasattr(self, "canvas"):
-            self.canvas.focus_set()
-        return "break"
-
-    def send_ingame_chat(self, event=None):
-        if not hasattr(self, "ingame_chat_entry"):
-            return "break"
-        text = self.ingame_chat_entry.get().strip()
-        if text:
-            self.ingame_chat_entry.delete(0, tk.END)
-            if self.is_host and self.server:
-                self.server.send_host_chat(text)
-            elif self.is_client and self.client:
-                self.client.send_chat(text)
-        return "break"
-
-    def route_ingame_chat_key(self, event=None):
-        """Send keys back into the in-game chat when the overlay is open."""
-        if not self.ingame_chat_should_capture_keys():
-            return None
-        if self.ingame_chat_entry_has_focus():
-            return None
-
-        keysym = getattr(event, "keysym", "")
-        char = getattr(event, "char", "")
-        if keysym == "slash" or char == "/":
-            return self.toggle_ingame_chat(event)
-        if keysym in ("Return", "KP_Enter"):
-            return self.send_ingame_chat(event)
-        if keysym == "Escape":
-            return self.close_ingame_chat(event)
-
-        try:
-            self.focus_ingame_chat_entry()
-            if keysym == "BackSpace":
-                cursor = self.ingame_chat_entry.index(tk.INSERT)
-                if cursor > 0:
-                    self.ingame_chat_entry.delete(cursor - 1, cursor)
-                return "break"
-            if keysym == "Delete":
-                cursor = self.ingame_chat_entry.index(tk.INSERT)
-                self.ingame_chat_entry.delete(cursor, cursor + 1)
-                return "break"
-            if keysym == "Left":
-                self.ingame_chat_entry.icursor(max(0, self.ingame_chat_entry.index(tk.INSERT) - 1))
-                return "break"
-            if keysym == "Right":
-                self.ingame_chat_entry.icursor(self.ingame_chat_entry.index(tk.INSERT) + 1)
-                return "break"
-            if keysym == "Home":
-                self.ingame_chat_entry.icursor(0)
-                return "break"
-            if keysym == "End":
-                self.ingame_chat_entry.icursor(tk.END)
-                return "break"
-            if len(char) == 1 and char >= " ":
-                self.ingame_chat_entry.insert(tk.INSERT, char)
-                return "break"
-        except tk.TclError:
-            return "break"
-        return "break"
-
-    def refresh_ingame_chat_text(self):
-        if not hasattr(self, "ingame_chat_text") or not self.ingame_chat_text.winfo_exists():
-            return
-        self.ingame_chat_text.config(state="normal")
-        self.ingame_chat_text.delete("1.0", tk.END)
-        for index, message in enumerate(self.current_chat_history()):
-            tag = f"ingame_chat_{index}"
-            self.ingame_chat_text.tag_config(tag, foreground=message.get("color", "#ffffff"))
-            prefix = "" if message.get("kind") == "system" else f"{message.get('name', 'Player')}: "
-            self.ingame_chat_text.insert(tk.END, prefix + message.get("text", "") + "\n", tag)
-        self.ingame_chat_text.config(state="disabled")
-        self.ingame_chat_text.see(tk.END)
 
     def update_ingame_chat(self):
         """Show notifications for messages added since the last state update."""
@@ -695,9 +502,6 @@ class GridGameApp:
         for message in history[overlap:]:
             self.show_chat_notification(message)
         self.ingame_chat_snapshot = history
-        self.refresh_ingame_chat_text()
-        if self.ingame_chat_is_open():
-            self.root.after_idle(self.focus_ingame_chat_entry)
 
     def show_chat_notification(self, message):
         if len(self.ingame_chat_notifications) >= 7:
@@ -815,8 +619,6 @@ class GridGameApp:
 
         self.countdown_active = True
         self.btn_start.config(state="disabled")
-        if hasattr(self, "btn_demo_start"):
-            self.btn_demo_start.config(state="disabled")
         self.server.begin_countdown(diff, 3)
         self.show_lobby_countdown(3, is_host=True)
         self.root.after(1000, lambda: self.countdown_active and self.show_lobby_countdown(2, is_host=True))
@@ -905,22 +707,6 @@ class GridGameApp:
             cursor="hand2"
         )
         self.btn_back.pack(side="right", padx=20, pady=12)
-
-        self.btn_reset = tk.Button(
-            self.header,
-            text="FORCE RESET",
-            command=self.reset_host_game,
-            bg="#313143",
-            fg="#ffffff",
-            activebackground="#42425b",
-            activeforeground="#ffffff",
-            bd=0,
-            padx=15,
-            pady=5,
-            font=self.score_font,
-            cursor="hand2"
-        )
-        self.btn_reset.pack(side="right", padx=10, pady=12)
 
         self.sub_header = tk.Frame(self.current_frame, bg="#15151e", height=30)
         self.sub_header.pack(fill="x")
@@ -1035,7 +821,7 @@ class GridGameApp:
 
         self.footer = tk.Label(
             self.current_frame,
-            text="Host Spectator Mode - Live Split-Screen Player Monitoring  / to chat",
+            text="Host Spectator Mode - Live Split-Screen Player Monitoring",
             fg="#8c8c9a",
             bg="#121214",
             font=self.hint_font
@@ -1070,10 +856,6 @@ class GridGameApp:
         ips_text = " | ".join(ip_list) if ip_list else "Waiting for connections..."
         self.lbl_ips.config(text=ips_text)
         self.update_leaderboard()
-
-    def reset_host_game(self):
-        if self.server:
-            self.server.reset_game()
 
     def focus_spectator_slot(self, slot_id):
         if getattr(self, "focused_slot", None) != slot_id:
@@ -1561,7 +1343,7 @@ class GridGameApp:
 
         self.footer = tk.Label(
             self.current_frame,
-            text="Arrow keys / WASD to move  \u2022  1 / 2 / 3 to select powerup  \u2022  E to use  \u2022  / to chat",
+            text="Arrow keys / WASD to move  \u2022  1 / 2 / 3 to select powerup  \u2022  E to use",
             fg="#8c8c9a",
             bg="#121214",
             font=self.hint_font
@@ -1848,8 +1630,6 @@ class GridGameApp:
 
     def select_powerup_slot(self, slot_index):
         """Highlight the selected powerup slot (0-based). No-op if slot is empty."""
-        if self.ingame_chat_should_capture_keys():
-            return
         if not hasattr(self, 'powerup_slot_frames'):
             return
         # Get current slots for this player
@@ -1997,8 +1777,6 @@ class GridGameApp:
 
     def open_vault_at_current_item(self):
         """Open the vault only when standing on one of the local player's items."""
-        if self.ingame_chat_should_capture_keys():
-            return
         if not self.in_active_game or self.qte_active:
             return
         if not self.is_client or self.my_player_id not in self.players:
@@ -2021,8 +1799,6 @@ class GridGameApp:
 
     def use_selected_powerup(self):
         """Called when player presses E. Activates the selected powerup slot."""
-        if self.ingame_chat_should_capture_keys():
-            return
         if self.selected_powerup_slot is None:
             return
 
@@ -2447,9 +2223,6 @@ class GridGameApp:
             self.canvas.tag_bind("qte_cancel", "<Button-1>", lambda e: self.cancel_qte())
 
     def cancel_qte(self):
-        if self.ingame_chat_should_capture_keys():
-            self.close_ingame_chat()
-            return
         if not self.qte_active:
             return
         self.qte_active = False
@@ -2461,8 +2234,6 @@ class GridGameApp:
             self.draw_elements()
 
     def move_player(self, dr, dc):
-        if self.ingame_chat_should_capture_keys():
-            return
         if not self.in_game:
             return
 
