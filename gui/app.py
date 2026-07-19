@@ -534,6 +534,9 @@ class GridGameApp:
         self.ingame_chat_entry.bind("<Return>", self.send_ingame_chat)
         self.ingame_chat_entry.bind("<Escape>", self.close_ingame_chat)
         self.ingame_chat_entry.bind("<Key-slash>", self.toggle_ingame_chat)
+        if not getattr(self, "_ingame_chat_key_router_bound", False):
+            self.root.bind_all("<Key>", self.route_ingame_chat_key, add="+")
+            self._ingame_chat_key_router_bound = True
         tk.Button(
             entry_row, text="SEND", command=self.send_ingame_chat,
             bg="#00d2ff", fg="#121214", bd=0, padx=16, pady=7,
@@ -546,9 +549,26 @@ class GridGameApp:
         if not hasattr(self, "ingame_chat_panel"):
             return False
         try:
+            if not self.ingame_chat_panel.winfo_exists():
+                return False
             return bool(self.ingame_chat_panel.place_info())
         except tk.TclError:
             return False
+
+    def ingame_chat_entry_has_focus(self):
+        if not hasattr(self, "ingame_chat_entry"):
+            return False
+        try:
+            return self.root.focus_get() is self.ingame_chat_entry
+        except tk.TclError:
+            return False
+
+    def ingame_chat_should_capture_keys(self):
+        return (
+            getattr(self, "in_active_game", False)
+            and hasattr(self, "ingame_chat_entry")
+            and self.ingame_chat_is_open()
+        )
 
     def toggle_ingame_chat(self, event=None):
         if not self.in_active_game or not hasattr(self, "ingame_chat_panel"):
@@ -560,7 +580,7 @@ class GridGameApp:
     def open_ingame_chat(self, event=None):
         if not self.in_active_game or not hasattr(self, "ingame_chat_panel"):
             return "break"
-        if event is not None and self.root.focus_get() is self.ingame_chat_entry:
+        if event is not None and self.ingame_chat_entry_has_focus():
             return "break"
         self.chat_notification_frame.place_forget()
         self.ingame_chat_panel.place(relx=1.0, rely=1.0, x=-20, y=-20, anchor="se")
@@ -576,6 +596,7 @@ class GridGameApp:
             return "break"
         try:
             self.ingame_chat_entry.config(state="normal")
+            self.ingame_chat_entry.focus_set()
             self.ingame_chat_entry.focus_force()
             self.ingame_chat_entry.icursor(tk.END)
         except tk.TclError:
@@ -601,6 +622,52 @@ class GridGameApp:
                 self.server.send_host_chat(text)
             elif self.is_client and self.client:
                 self.client.send_chat(text)
+        return "break"
+
+    def route_ingame_chat_key(self, event=None):
+        """Send keys back into the in-game chat when the overlay is open."""
+        if not self.ingame_chat_should_capture_keys():
+            return None
+        if self.ingame_chat_entry_has_focus():
+            return None
+
+        keysym = getattr(event, "keysym", "")
+        char = getattr(event, "char", "")
+        if keysym == "slash" or char == "/":
+            return self.toggle_ingame_chat(event)
+        if keysym in ("Return", "KP_Enter"):
+            return self.send_ingame_chat(event)
+        if keysym == "Escape":
+            return self.close_ingame_chat(event)
+
+        try:
+            self.focus_ingame_chat_entry()
+            if keysym == "BackSpace":
+                cursor = self.ingame_chat_entry.index(tk.INSERT)
+                if cursor > 0:
+                    self.ingame_chat_entry.delete(cursor - 1, cursor)
+                return "break"
+            if keysym == "Delete":
+                cursor = self.ingame_chat_entry.index(tk.INSERT)
+                self.ingame_chat_entry.delete(cursor, cursor + 1)
+                return "break"
+            if keysym == "Left":
+                self.ingame_chat_entry.icursor(max(0, self.ingame_chat_entry.index(tk.INSERT) - 1))
+                return "break"
+            if keysym == "Right":
+                self.ingame_chat_entry.icursor(self.ingame_chat_entry.index(tk.INSERT) + 1)
+                return "break"
+            if keysym == "Home":
+                self.ingame_chat_entry.icursor(0)
+                return "break"
+            if keysym == "End":
+                self.ingame_chat_entry.icursor(tk.END)
+                return "break"
+            if len(char) == 1 and char >= " ":
+                self.ingame_chat_entry.insert(tk.INSERT, char)
+                return "break"
+        except tk.TclError:
+            return "break"
         return "break"
 
     def refresh_ingame_chat_text(self):
@@ -629,6 +696,8 @@ class GridGameApp:
             self.show_chat_notification(message)
         self.ingame_chat_snapshot = history
         self.refresh_ingame_chat_text()
+        if self.ingame_chat_is_open():
+            self.root.after_idle(self.focus_ingame_chat_entry)
 
     def show_chat_notification(self, message):
         if len(self.ingame_chat_notifications) >= 7:
@@ -1296,8 +1365,8 @@ class GridGameApp:
             self.players = self.client.players
             self.per_player_data = self.client.per_player_data
             self.game_started = self.client.game_started
-            self.difficulty = getattr(self.client, "difficulty", self.difficulty)
-            self.items_per_player = getattr(self.client, "items_per_player", self.items_per_player)
+            self.difficulty = getattr(self.client, "difficulty", getattr(self, "difficulty", "easy"))
+            self.items_per_player = getattr(self.client, "items_per_player", getattr(self, "items_per_player", 3))
             countdown = getattr(self.client, "countdown", 0)
             if countdown > 0 and not self.game_started:
                 self.countdown_active = True
@@ -1779,8 +1848,7 @@ class GridGameApp:
 
     def select_powerup_slot(self, slot_index):
         """Highlight the selected powerup slot (0-based). No-op if slot is empty."""
-        if (hasattr(self, "ingame_chat_entry")
-                and self.root.focus_get() is self.ingame_chat_entry):
+        if self.ingame_chat_should_capture_keys():
             return
         if not hasattr(self, 'powerup_slot_frames'):
             return
@@ -1929,6 +1997,8 @@ class GridGameApp:
 
     def open_vault_at_current_item(self):
         """Open the vault only when standing on one of the local player's items."""
+        if self.ingame_chat_should_capture_keys():
+            return
         if not self.in_active_game or self.qte_active:
             return
         if not self.is_client or self.my_player_id not in self.players:
@@ -1951,8 +2021,7 @@ class GridGameApp:
 
     def use_selected_powerup(self):
         """Called when player presses E. Activates the selected powerup slot."""
-        if (hasattr(self, "ingame_chat_entry")
-                and self.root.focus_get() is self.ingame_chat_entry):
+        if self.ingame_chat_should_capture_keys():
             return
         if self.selected_powerup_slot is None:
             return
@@ -2378,6 +2447,9 @@ class GridGameApp:
             self.canvas.tag_bind("qte_cancel", "<Button-1>", lambda e: self.cancel_qte())
 
     def cancel_qte(self):
+        if self.ingame_chat_should_capture_keys():
+            self.close_ingame_chat()
+            return
         if not self.qte_active:
             return
         self.qte_active = False
@@ -2389,8 +2461,7 @@ class GridGameApp:
             self.draw_elements()
 
     def move_player(self, dr, dc):
-        if (hasattr(self, "ingame_chat_entry")
-                and self.root.focus_get() is self.ingame_chat_entry):
+        if self.ingame_chat_should_capture_keys():
             return
         if not self.in_game:
             return
