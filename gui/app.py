@@ -114,7 +114,7 @@ class GridGameApp:
         self.root.bind("<Return>", lambda e: self.open_vault_at_current_item())
         self.root.bind("<KP_Enter>", lambda e: self.open_vault_at_current_item())
         self.root.bind("<Escape>", lambda e: self.cancel_qte())
-        self.root.bind("<Key-slash>", self.open_ingame_chat)
+        self.root.bind("<Key-slash>", self.toggle_ingame_chat)
 
     def clear_screen(self):
         self.hide_powerup_tooltip()
@@ -528,6 +528,7 @@ class GridGameApp:
         self.ingame_chat_entry.pack(side="left", fill="x", expand=True, ipady=7)
         self.ingame_chat_entry.bind("<Return>", self.send_ingame_chat)
         self.ingame_chat_entry.bind("<Escape>", self.close_ingame_chat)
+        self.ingame_chat_entry.bind("<Key-slash>", self.toggle_ingame_chat)
         tk.Button(
             entry_row, text="SEND", command=self.send_ingame_chat,
             bg="#00d2ff", fg="#121214", bd=0, padx=16, pady=7,
@@ -536,11 +537,26 @@ class GridGameApp:
         self.ingame_chat_panel.bind("<Button-1>", self.focus_ingame_chat_entry)
         self.refresh_ingame_chat_text()
 
+    def ingame_chat_is_open(self):
+        if not hasattr(self, "ingame_chat_panel"):
+            return False
+        try:
+            return bool(self.ingame_chat_panel.place_info())
+        except tk.TclError:
+            return False
+
+    def toggle_ingame_chat(self, event=None):
+        if not self.in_active_game or not hasattr(self, "ingame_chat_panel"):
+            return "break"
+        if self.ingame_chat_is_open():
+            return self.close_ingame_chat(event)
+        return self.open_ingame_chat(event)
+
     def open_ingame_chat(self, event=None):
         if not self.in_active_game or not hasattr(self, "ingame_chat_panel"):
-            return None
+            return "break"
         if event is not None and self.root.focus_get() is self.ingame_chat_entry:
-            return None
+            return "break"
         self.chat_notification_frame.place_forget()
         self.ingame_chat_panel.place(relx=1.0, rely=1.0, x=-20, y=-20, anchor="se")
         self.ingame_chat_panel.lift()
