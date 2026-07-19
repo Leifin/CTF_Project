@@ -1,6 +1,8 @@
 ﻿import tkinter as tk
 from tkinter import font, messagebox
+import os
 import random
+import sys
 import time
 from config import (
     WINDOW_WIDTH, WINDOW_HEIGHT, GRID_ROWS, GRID_COLS, CELL_SIZE,
@@ -53,6 +55,7 @@ class GridGameApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Grid Explorer - Multiplayer")
+        self.set_window_icon()
         self.root.configure(bg="#121214")
         self.root.resizable(True, True)
         self.root.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}+0+0")
@@ -133,6 +136,29 @@ class GridGameApp:
         self.root.bind("<Return>", lambda e: self.open_vault_at_current_item())
         self.root.bind("<KP_Enter>", lambda e: self.open_vault_at_current_item())
         self.root.bind("<Escape>", lambda e: self.cancel_qte())
+
+    def asset_path(self, filename):
+        base_path = getattr(
+            sys,
+            "_MEIPASS",
+            os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        )
+        return os.path.join(base_path, "assets", filename)
+
+    def set_window_icon(self):
+        try:
+            ico_path = self.asset_path("grid_explorer_icon.ico")
+            if os.path.exists(ico_path):
+                self.root.iconbitmap(ico_path)
+        except Exception:
+            pass
+        try:
+            png_path = self.asset_path("grid_explorer_icon.png")
+            if os.path.exists(png_path):
+                self.window_icon = tk.PhotoImage(file=png_path)
+                self.root.iconphoto(True, self.window_icon)
+        except Exception:
+            pass
 
     def clear_screen(self):
         self.hide_powerup_tooltip()
