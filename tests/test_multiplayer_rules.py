@@ -268,6 +268,17 @@ class MultiplayerRulesTest(unittest.TestCase):
         self.assertIn((1, 0), server.player_visited[1])
         self.assertIn((1, 0), server.player_visited[2])
 
+    def test_duo_teammates_receive_the_same_unlocked_item_progress(self):
+        server = self.make_server()
+        server.game_mode = GAME_MODE_DUO
+        server.players[1]["team"] = 1
+        server.players[2]["team"] = 1
+        server.player_collected[1] = {(2, 2): "#00d2ff"}
+
+        state_for_partner = server._build_state(2)["per_player"]
+
+        self.assertEqual(state_for_partner["1"]["collected"], {"2,2": "#00d2ff"})
+
     def test_duo_decryptor_can_change_team_color(self):
         server = self.make_server()
         sent = []

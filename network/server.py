@@ -947,13 +947,14 @@ class GridServer:
         per_player = {}
         for p_id in self.players:
             is_owner = p_id == recipient_id
+            shares_team_progress = is_owner or self.players_are_teammates(p_id, recipient_id)
             player_state = {
                 "visited": list(self.player_visited.get(p_id, set())) if is_owner else [],
                 "items":   list(self.player_items.get(p_id, set())),
                 "collected": {
                     f"{r},{c}": color
                     for (r, c), color in self.player_collected.get(p_id, {}).items()
-                } if is_owner else {},
+                } if shares_team_progress else {},
                 "powerups": self.player_powerups.get(p_id, [None, None, None])
             }
             player_state["item_keys"] = {

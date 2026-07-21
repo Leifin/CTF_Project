@@ -1907,6 +1907,17 @@ class GridGameApp:
             return max(0, self.items_per_player - len(remaining))
         return len(data.get("collected", {}))
 
+    def team_items_unlocked(self, p_id):
+        """Return the shared unlocked-item total displayed to a duo team."""
+        if self.current_game_mode() != GAME_MODE_DUO:
+            return len(self.per_player_data.get(p_id, {}).get("collected", {}))
+        team_id = self.players.get(p_id, {}).get("team")
+        unlocked = set()
+        for member_id, info in self.players.items():
+            if info.get("team") == team_id:
+                unlocked.update(self.per_player_data.get(member_id, {}).get("collected", {}).keys())
+        return len(unlocked)
+
     def _display_groups_for_results(self):
         player_ids = sorted(self.players.keys())
         if self.current_game_mode() == GAME_MODE_DUO:
@@ -2188,8 +2199,7 @@ class GridGameApp:
             
         self.lbl_moves.config(text=f"MOVES: {self.moves}")
         if hasattr(self, 'lbl_items') and self.my_player_id in self.per_player_data:
-            my_data = self.per_player_data[self.my_player_id]
-            found = len(my_data.get("collected", {}))
+            found = self.team_items_unlocked(self.my_player_id)
             self.lbl_items.config(text=f"ITEMS: {found}/{self.items_per_player}")
 
         # Lock button always available (gold)
