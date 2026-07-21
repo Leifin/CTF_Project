@@ -832,6 +832,7 @@ class LockScreenDialog:
         return [(index // columns, index % columns) for index in range(item_count)]
 
     def show(self):
+        self.active_entry = None
         dialog = tk.Toplevel(self.parent)
         dialog.title("Security Vault")
         dialog.configure(bg="#0e0e16")
@@ -871,6 +872,11 @@ class LockScreenDialog:
 
         for item, (row, col) in zip(self.items_data, self.panel_grid_positions(n)):
             self._build_panel(panel_grid, item, dialog, row=row, col=col)
+
+        # When Enter opened the vault while standing on an item, put the
+        # keyboard cursor directly in that item's answer field.
+        if self.active_entry is not None:
+            dialog.after_idle(self.active_entry.focus_set)
 
         # Close
         tk.Button(dialog, text="CLOSE", command=dialog.destroy,
@@ -977,6 +983,7 @@ class LockScreenDialog:
                          validate="key",
                          validatecommand=(ef.register(lambda s: s.isalpha() or s == ""), "%P"))
         entry.pack(fill="x", padx=8, pady=4)
+        self.active_entry = entry
 
         res_lbl = tk.Label(panel, text="", bg="#1a1a24",
                            font=font.Font(family="Segoe UI", size=8))
