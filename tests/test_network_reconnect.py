@@ -94,6 +94,26 @@ class NetworkReconnectTest(unittest.TestCase):
             lambda: any("left the lobby" in msg["text"] for msg in self.server.chat_history)
         ))
 
+    def test_host_can_kick_player_and_slot_can_be_reused(self):
+        kicked = []
+        first = GridClient(
+            "127.0.0.1", port=self.port,
+            on_kicked=lambda reason: kicked.append(reason),
+        )
+        self.assertTrue(first.connect())
+        self.assertTrue(self.wait_for(lambda: first.my_player_id == 1))
+
+        self.assertTrue(self.server.kick_player(1))
+        self.assertTrue(self.wait_for(lambda: len(kicked) == 1), kicked)
+        self.assertNotIn(1, self.server.players)
+        self.assertTrue(any("removed by the host" in msg["text"]
+                            for msg in self.server.chat_history))
+
+        second = GridClient("127.0.0.1", port=self.port)
+        self.addCleanup(second.stop)
+        self.assertTrue(second.connect())
+        self.assertTrue(self.wait_for(lambda: second.my_player_id == 1))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -574,6 +574,8 @@ class GridServer:
             pass
         if server_is_stopping:
             return
+        if p_id not in self.players:
+            return
         leaving_name = self.players.get(p_id, {}).get("name", f"Player {p_id}")
         self.host_discovered_items.difference_update(self.player_items.get(p_id, set()))
         for d in (self.clients, self.players,
@@ -593,6 +595,52 @@ class GridServer:
         if self.on_game_update and self.game_started:
             self.on_game_update()
         self.broadcast_state()
+
+    def kick_player(self, p_id):
+        """Disconnect a player at the host's request.
+
+        This method is intentionally only exposed on the server object; there is
+        no client action that can request a kick.
+        """
+        if p_id not in self.players:
+            return False
+
+        player_name = self.players[p_id].get("name", f"Player {p_id}")
+        conn = self.clients.get(p_id)
+        self._send_to(p_id, {
+            "type": "kicked",
+            "reason": "You were removed from the lobby by the host.",
+        })
+
+        self.host_discovered_items.difference_update(self.player_items.get(p_id, set()))
+        for data in (self.clients, self.players,
+                     self.player_visited, self.player_items, self.player_collected,
+                     self.player_item_keys, self.player_powerups):
+            data.pop(p_id, None)
+        self.finished_players = [player_id for player_id in self.finished_players
+                                 if player_id != p_id]
+        self.finish_times.pop(p_id, None)
+        self.assign_duo_roles()
+        self._append_chat(
+            "system", "SYSTEM", "#8c8c9a",
+            f"{player_name} was removed by the host.", broadcast=False,
+        )
+        if conn:
+            try:
+                conn.shutdown(socket.SHUT_RDWR)
+            except Exception:
+                pass
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+        if self.on_lobby_update:
+            self.on_lobby_update()
+        if self.on_game_update and self.game_started:
+            self.on_game_update()
+        self.broadcast_state()
+        return True
 
     def process_client_profile(self, p_id, name, color):
         if (p_id not in self.players

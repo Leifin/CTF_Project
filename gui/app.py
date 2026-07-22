@@ -390,6 +390,16 @@ class GridGameApp:
         )
         self.btn_start.pack(side="right", padx=10, pady=12)
 
+        self.btn_kick = tk.Button(
+            self.header,
+            text="KICK PLAYER",
+            command=self.show_kick_player_menu,
+            bg="#6b2835", fg="#ffffff", activebackground="#ff4d4d",
+            activeforeground="#ffffff", bd=0, padx=15, pady=5,
+            font=self.score_font, cursor="hand2", state="disabled",
+        )
+        self.btn_kick.pack(side="right", padx=5, pady=12)
+
         self.sub_header = tk.Frame(self.current_frame, bg="#15151e", height=30)
         self.sub_header.pack(fill="x")
         
@@ -419,6 +429,30 @@ class GridGameApp:
             return
         
         self.lbl_ips.config(text="Listening on port 5555. Share your Radmin VPN IP address with players!")
+
+    def show_kick_player_menu(self):
+        if not self.is_host or not self.server or not self.server.players:
+            return
+        menu = tk.Menu(self.root, tearoff=0, bg="#212128", fg="#ffffff",
+                       activebackground="#ff4d4d", activeforeground="#ffffff")
+        for p_id, player in sorted(self.server.players.items()):
+            label = f"{player.get('name', f'Player {p_id}')} (P{p_id})"
+            menu.add_command(label=label,
+                             command=lambda player_id=p_id: self.kick_player_action(player_id))
+        try:
+            x = self.btn_kick.winfo_rootx()
+            y = self.btn_kick.winfo_rooty() + self.btn_kick.winfo_height()
+            menu.tk_popup(x, y)
+        finally:
+            menu.grab_release()
+
+    def kick_player_action(self, p_id):
+        if not self.is_host or not self.server or p_id not in self.server.players:
+            return
+        player = self.server.players[p_id]
+        name = player.get("name", f"Player {p_id}")
+        if messagebox.askyesno("Kick Player", f"Remove {name} (P{p_id}) from the lobby?"):
+            self.server.kick_player(p_id)
 
     def current_game_mode(self):
         fallback = getattr(self, "game_mode", GAME_MODE_SOLO)
@@ -972,6 +1006,8 @@ class GridGameApp:
 
         if self.is_host:
             num_players = len(current_players)
+            if hasattr(self, "btn_kick"):
+                self.btn_kick.config(state="normal" if current_players else "disabled")
             if self.lobby_can_start(current_players):
                 self.btn_start.config(state="normal", bg="#55ff55", fg="#121214")
             else:
@@ -1548,7 +1584,8 @@ class GridGameApp:
             on_unlock_result=lambda success: self.root.after(0, lambda: self.on_unlock_result_received(success)),
             on_profile_result=lambda success, reason: self.root.after(
                 0, lambda: self.on_profile_result_received(success, reason)
-            )
+            ),
+            on_kicked=lambda reason: self.root.after(0, self.on_client_kicked, reason),
         )
         
         if not self.client.connect():
@@ -1724,6 +1761,10 @@ class GridGameApp:
 
     def on_client_disconnect(self):
         messagebox.showwarning("Connection Lost", "Disconnected from server host.")
+        self.show_title_screen()
+
+    def on_client_kicked(self, reason):
+        messagebox.showwarning("Removed From Lobby", reason)
         self.show_title_screen()
 
     def toggle_ready_action(self):

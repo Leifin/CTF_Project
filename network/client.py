@@ -6,7 +6,8 @@ class GridClient:
     def __init__(self, host_ip, port=5555,
                  on_init=None, on_state_update=None,
                  on_disconnect=None, on_lobby_full=None,
-                 on_unlock_result=None, on_profile_result=None):
+                 on_unlock_result=None, on_profile_result=None,
+                 on_kicked=None):
         self.host_ip = host_ip
         self.port = port
         self.on_init = on_init
@@ -15,6 +16,7 @@ class GridClient:
         self.on_lobby_full = on_lobby_full
         self.on_unlock_result = on_unlock_result
         self.on_profile_result = on_profile_result
+        self.on_kicked = on_kicked
 
         self.client_socket = None
         self.client_running = False
@@ -90,6 +92,18 @@ class GridClient:
                     msg = json.loads(line)
                     if msg.get("type") == "server_shutdown":
                         self._notify_disconnect()
+                        return
+
+                    if msg.get("type") == "kicked":
+                        self.client_running = False
+                        self._disconnect_reported = True
+                        try:
+                            self.client_socket.close()
+                        except Exception:
+                            pass
+                        self.client_socket = None
+                        if self.on_kicked:
+                            self.on_kicked(msg.get("reason", "You were removed by the host."))
                         return
 
                     if msg.get("type") == "init":
